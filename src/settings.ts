@@ -120,10 +120,12 @@ export class WechatSettingTab extends PluginSettingTab {
       THEMES.forEach((t) => d.addOption(t.id, t.name));
       d.setValue(s.themeId).onChange(async (v) => {
         s.themeId = v;
+        s.themeColor = THEMES.find((t) => t.id === v)?.defaultColor ?? s.themeColor;
         await save();
+        this.display(); // 刷新主题色选择器
       });
     });
-    new Setting(containerEl).setName("主题色").addColorPicker((c) =>
+    new Setting(containerEl).setName("主题色").setDesc("切换主题时会自动换成该主题的推荐色，之后可以再改。").addColorPicker((c) =>
       c.setValue(s.themeColor).onChange(async (v) => {
         s.themeColor = v;
         await save();

@@ -43,6 +43,11 @@ export class WechatPreviewView extends ItemView {
     themeSel.value = this.plugin.settings.themeId;
     themeSel.onchange = async () => {
       this.plugin.settings.themeId = themeSel.value;
+      const preset = THEMES.find((t) => t.id === themeSel.value)?.defaultColor;
+      if (preset) {
+        this.plugin.settings.themeColor = preset;
+        color.value = preset;
+      }
       await this.plugin.saveSettings();
       this.plugin.refreshPreviews();
     };

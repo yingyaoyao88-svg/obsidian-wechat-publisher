@@ -30,3 +30,24 @@ assert.ok(!h.includes("[[不应处理]]"), "callout 内双链也会转文本");
 assert.ok(h.includes("☐") && h.includes("☑"), "任务列表");
 assert.ok(res.warnings.length === 0, res.warnings.join());
 console.log("render ok, html length =", h.length);
+
+// ---- 所有主题都能渲染、互不相同、且不残留 class
+import { THEMES } from "./.build/render.mjs";
+const seen = new Set();
+let gallery = "";
+for (const t of THEMES) {
+  assert.match(t.defaultColor, /^#[0-9a-f]{6}$/i, `${t.id} 推荐色需为 6 位十六进制（样式里会拼接透明度）`);
+  const r = await renderForWechat(md, {
+    themeId: t.id, themeColor: t.defaultColor, fontSize: 15, codeTheme: "one-dark",
+    macCodeBlock: true, linkToFootnote: true, imageCaption: true,
+    resolveImage: async (src) => src,
+    parseHTML: (h) => new JSDOM(h).window.document,
+  });
+  assert.ok(!/class=|<style/.test(r.html), `${t.id} 残留 class`);
+  assert.ok(!r.html.includes("undefined"), `${t.id} 样式里出现 undefined`);
+  assert.ok(!seen.has(r.html), `${t.id} 与其它主题输出完全相同`);
+  seen.add(r.html);
+  gallery += `<div style="width:400px;flex:none;border:1px solid #ddd;padding:8px"><div style="font:bold 14px sans-serif;margin-bottom:6px">${t.name}（${t.id}）</div>${r.html}</div>`;
+}
+writeFileSync(new URL("./.build/gallery.html", import.meta.url), `<meta charset=utf-8><body style="display:flex;flex-wrap:wrap;gap:12px;width:1700px">${gallery}</body>`);
+console.log(`themes ok: ${THEMES.length} 个主题`);
