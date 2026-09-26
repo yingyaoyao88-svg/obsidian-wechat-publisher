@@ -13,10 +13,34 @@ export interface ThemeOptions {
   fontSize: number;
 }
 
+type HeadingLevel = "h1" | "h2" | "h3" | "h4";
+
+/**
+ * 主题的“结构装饰”：公众号没有 ::before/::after，所以需要真实插入的元素/文字，
+ * 由渲染器按这里的声明插入，再由主题样式（wx-h-pre / wx-h-num / wx-hr …）上色。
+ */
+export interface ThemeDecor {
+  /** 标题前缀文字，如 { h2: "📌 " } → <span class="wx-h-pre"> */
+  headingPrefix?: Partial<Record<HeadingLevel, string>>;
+  /** 标题后缀文字 → <span class="wx-h-suf"> */
+  headingSuffix?: Partial<Record<HeadingLevel, string>>;
+  /** 二级标题自动编号 01、02… → <span class="wx-h-num"> */
+  h2Number?: boolean;
+  /** 引用块开头的大引号 → <section class="wx-quote-mark"> */
+  quoteMark?: string;
+  /** 用文字替代分隔线，如 "· · ·" → <section class="wx-hr"> */
+  hr?: string;
+  /** 文末结束标记，如 "— END —" → <section class="wx-ending"> */
+  ending?: string;
+}
+
+export type ThemeGroup = "经典" | "网页风格";
+
 export interface Theme {
   id: string;
   name: string;
   styles: Record<string, string>;
+  decor: ThemeDecor;
 }
 
 export type CodeThemeId = "one-dark" | "github";
@@ -66,6 +90,13 @@ function base(o: ThemeOptions): Record<string, string> {
     "section.wx-callout": `margin:1.2em 0;padding:10px 14px;border-radius:6px;border-left:4px solid ${o.color};background:${o.color}14;`,
     "section.wx-callout-title": `font-weight:bold;margin-bottom:4px;color:${o.color};font-size:${fs}px;`,
     "section.wx-callout p": `margin:0.4em 0;`,
+    // 代码块外框（背景色由代码配色决定，写在元素自身上）
+    "section.wx-codeblock": `margin:1.2em 0;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.12);text-align:left;`,
+    // 结构装饰的默认样式
+    "span.wx-h-num": `display:block;font-size:0.8em;color:${o.color};margin-bottom:4px;`,
+    "section.wx-quote-mark": `font-family:Georgia,serif;font-size:40px;line-height:1;height:26px;color:${o.color};opacity:0.5;`,
+    "section.wx-hr": `text-align:center;color:#bbb;letter-spacing:0.6em;margin:2em 0;font-size:14px;line-height:1;`,
+    "section.wx-ending": `text-align:center;color:#999;font-size:13px;letter-spacing:0.3em;margin:3em 0 1em;`,
   };
 }
 
@@ -85,6 +116,8 @@ interface ThemeDef {
   name: string;
   /** 切换到该主题时使用的推荐主题色（之后仍可自行修改） */
   defaultColor: string;
+  group?: ThemeGroup;
+  decor?: ThemeDecor;
   build(o: ThemeOptions, s: Sizes, b: Record<string, string>): Record<string, string>;
 }
 
@@ -259,13 +292,14 @@ const DEFS: ThemeDef[] = [
     id: "geek",
     name: "极客",
     defaultColor: "#00b894",
+    decor: { headingPrefix: { h2: "# ", h3: "## " } },
     build: (o, s) => ({
       h1: `margin:1.4em 0 1em;font-size:${s.h1}px;font-weight:bold;color:#2d3436;font-family:${MONO};`,
       "h1 > span.wx-h": `border-bottom:3px solid ${o.color};padding-bottom:4px;`,
-      h2: `margin:2em 0 1em;font-size:${s.h2}px;font-weight:bold;font-family:${MONO};`,
-      "h2 > span.wx-h": `display:inline-block;background:#2d3436;color:${o.color};padding:4px 12px;border-radius:4px;`,
+      h2: `display:table;margin:2em 0 1em;font-size:${s.h2}px;font-weight:bold;font-family:${MONO};background:#2d3436;color:${o.color};padding:4px 12px;border-radius:4px;`,
+      "h2 > span.wx-h-pre": `color:#636e72;`,
+      "h3 > span.wx-h-pre": `color:${o.color};`,
       h3: `margin:1.6em 0 0.8em;font-size:${s.h3}px;font-weight:bold;color:#2d3436;font-family:${MONO};`,
-      "h3 > span.wx-h": `border-left:6px solid ${o.color};padding-left:8px;`,
       "h4, h5, h6": `margin:1.4em 0 0.6em;font-size:${s.h4}px;font-weight:bold;color:#2d3436;font-family:${MONO};`,
       strong: `font-weight:bold;color:#2d3436;border-bottom:2px solid ${o.color};`,
       blockquote: `margin:1.2em 0;padding:10px 16px;background:#f5f6fa;border-left:4px solid #2d3436;color:#555;font-family:${MONO};font-size:${o.fontSize - 1}px;`,
@@ -273,19 +307,306 @@ const DEFS: ThemeDef[] = [
       "code.wx-inline": `font-family:${MONO};font-size:90%;color:${o.color};background:#2d3436;padding:2px 5px;border-radius:3px;margin:0 2px;word-break:break-all;`,
     }),
   },
+  // ================================================================ 网页风格
+  {
+    // Notion：暖灰文字、几乎无装饰、红色行内代码、浅灰表头
+    id: "notion",
+    name: "Notion 风",
+    defaultColor: "#2383e2",
+    group: "网页风格",
+    build: (o, s, b) => ({
+      root: b.root.replace(/font-family:[^;]+;/, `font-family:ui-sans-serif,-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',Helvetica,sans-serif;`).replace("color:#3f3f3f", "color:#37352f").replace("letter-spacing:0.05em", "letter-spacing:0"),
+      p: `margin:0.6em 0;font-size:${o.fontSize + 1}px;line-height:1.7;color:#37352f;`,
+      strong: `font-weight:600;color:#37352f;`,
+      a: `color:#37352f;text-decoration:underline;border-bottom:none;`,
+      mark: `background:#fbf3db;color:inherit;padding:0 2px;`,
+      h1: `margin:1.6em 0 0.4em;font-size:${s.h1 + 6}px;font-weight:700;color:#37352f;line-height:1.3;`,
+      h2: `margin:1.6em 0 0.4em;font-size:${s.h2 + 3}px;font-weight:600;color:#37352f;line-height:1.3;`,
+      h3: `margin:1.2em 0 0.3em;font-size:${s.h3 + 1}px;font-weight:600;color:#37352f;`,
+      "h4, h5, h6": `margin:1em 0 0.3em;font-size:${s.h4}px;font-weight:600;color:#37352f;`,
+      blockquote: `margin:0.8em 0;padding:0 0 0 14px;border-left:3px solid #37352f;color:#37352f;`,
+      "blockquote p": `margin:0.3em 0;color:#37352f;font-size:${o.fontSize + 1}px;`,
+      "code.wx-inline": `font-family:${MONO};font-size:85%;color:#eb5757;background:rgba(135,131,120,0.15);padding:2px 4px;border-radius:4px;margin:0 1px;word-break:break-all;`,
+      "section.wx-codeblock": `margin:0.8em 0;border-radius:4px;overflow:hidden;text-align:left;`,
+      hr: `border:none;border-top:1px solid rgba(55,53,47,0.16);margin:1.6em 0;height:0;`,
+      img: `max-width:100%;height:auto;display:block;margin:0 auto;border-radius:3px;`,
+      th: `border:1px solid rgba(55,53,47,0.09);padding:7px 9px;background:#f7f6f3;color:rgba(55,53,47,0.65);font-weight:500;text-align:left;`,
+      td: `border:1px solid rgba(55,53,47,0.09);padding:7px 9px;color:#37352f;`,
+      "section.wx-callout": `margin:0.8em 0;padding:14px 16px;border-radius:4px;background:#f1f1ef;`,
+    }),
+  },
+  {
+    // Medium：衬线正文、大字号大行距、“· · ·”分隔、引用只留一根黑线
+    id: "medium",
+    name: "Medium 风",
+    defaultColor: "#1a8917",
+    group: "网页风格",
+    decor: { hr: "· · ·" },
+    build: (o, s, b) => ({
+      root: b.root.replace(/font-family:[^;]+;/, `font-family:Charter,Georgia,${SERIF};`).replace("color:#3f3f3f", "color:#242424").replace("letter-spacing:0.05em", "letter-spacing:0.01em"),
+      p: `margin:1.5em 0 0;font-size:${o.fontSize + 3}px;line-height:1.85;color:#242424;`,
+      strong: `font-weight:bold;color:#242424;`,
+      a: `color:#242424;text-decoration:underline;border-bottom:none;`,
+      h1: `margin:1.4em 0 0.6em;font-size:${s.h1 + 8}px;font-weight:bold;color:#242424;line-height:1.25;font-family:${FONT};letter-spacing:-0.01em;`,
+      h2: `margin:2em 0 0.4em;font-size:${s.h2 + 4}px;font-weight:bold;color:#242424;line-height:1.3;font-family:${FONT};`,
+      h3: `margin:1.6em 0 0.3em;font-size:${s.h3 + 2}px;font-weight:bold;color:#242424;font-family:${FONT};`,
+      "h4, h5, h6": `margin:1.4em 0 0.3em;font-size:${s.h4 + 1}px;font-weight:bold;color:#242424;font-family:${FONT};`,
+      blockquote: `margin:1.6em 0;padding:0 0 0 20px;border-left:3px solid #242424;color:#242424;font-style:italic;`,
+      "blockquote p": `margin:0.5em 0;color:#242424;font-size:${o.fontSize + 3}px;`,
+      li: `margin:0.6em 0;font-size:${o.fontSize + 3}px;line-height:1.8;`,
+      "code.wx-inline": `font-family:${MONO};font-size:80%;color:#242424;background:#f2f2f2;padding:3px 4px;border-radius:3px;margin:0 2px;word-break:break-all;`,
+      "section.wx-codeblock": `margin:1.6em 0;border-radius:4px;overflow:hidden;text-align:left;`,
+      img: `max-width:100%;height:auto;display:block;margin:0 auto;border-radius:0;`,
+      "section.wx-img": `margin:2em 0;text-align:center;`,
+      "section.wx-hr": `text-align:center;color:#242424;letter-spacing:1em;margin:2.4em 0;font-size:24px;line-height:1;`,
+    }),
+  },
+  {
+    // GitHub README：标题下细灰线、灰色引用竖线、85% 行内代码
+    id: "github",
+    name: "GitHub 风",
+    defaultColor: "#0969da",
+    group: "网页风格",
+    build: (o, s, b) => ({
+      root: b.root.replace(/font-family:[^;]+;/, `font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans','PingFang SC','Microsoft YaHei',Helvetica,Arial,sans-serif;`).replace("color:#3f3f3f", "color:#1f2328").replace("letter-spacing:0.05em", "letter-spacing:0").replace("line-height:1.75", "line-height:1.6"),
+      p: `margin:0 0 16px;font-size:${o.fontSize}px;line-height:1.6;color:#1f2328;`,
+      strong: `font-weight:600;color:#1f2328;`,
+      a: `color:${o.color};text-decoration:none;border-bottom:none;`,
+      mark: `background:#fff8c5;color:inherit;padding:0 2px;`,
+      h1: `margin:24px 0 16px;font-size:${s.h1 + 6}px;font-weight:600;color:#1f2328;padding-bottom:0.3em;border-bottom:1px solid #d1d9e0;line-height:1.25;`,
+      h2: `margin:24px 0 16px;font-size:${s.h2 + 2}px;font-weight:600;color:#1f2328;padding-bottom:0.3em;border-bottom:1px solid #d1d9e0;line-height:1.25;`,
+      h3: `margin:24px 0 16px;font-size:${s.h3}px;font-weight:600;color:#1f2328;line-height:1.25;`,
+      "h4, h5, h6": `margin:24px 0 16px;font-size:${s.h4}px;font-weight:600;color:#1f2328;`,
+      blockquote: `margin:0 0 16px;padding:0 1em;border-left:0.25em solid #d1d9e0;color:#59636e;`,
+      "blockquote p": `margin:0.4em 0;color:#59636e;`,
+      ul: `margin:0 0 16px;padding-left:2em;list-style-type:disc;color:#1f2328;`,
+      ol: `margin:0 0 16px;padding-left:2em;list-style-type:decimal;color:#1f2328;`,
+      li: `margin:0.25em 0;font-size:${o.fontSize}px;line-height:1.6;`,
+      "code.wx-inline": `font-family:${MONO};font-size:85%;color:#1f2328;background:rgba(129,139,152,0.12);padding:0.2em 0.4em;border-radius:6px;margin:0;word-break:break-all;`,
+      "section.wx-codeblock": `margin:0 0 16px;border-radius:6px;overflow:hidden;text-align:left;`,
+      hr: `border:none;border-top:4px solid #d1d9e0;margin:24px 0;height:0;`,
+      th: `border:1px solid #d1d9e0;padding:6px 13px;background:#f6f8fa;font-weight:600;text-align:left;`,
+      td: `border:1px solid #d1d9e0;padding:6px 13px;`,
+      "section.wx-callout": `margin:0 0 16px;padding:8px 16px;border-radius:0;border-left:0.25em solid ${o.color};background:transparent;`,
+    }),
+  },
+  {
+    // Apple 产品页：大标题居中、章节编号、大留白、大圆角图片、居中的金句式引用
+    id: "apple",
+    name: "Apple 风",
+    defaultColor: "#0071e3",
+    group: "网页风格",
+    decor: { h2Number: true },
+    build: (o, s, b) => ({
+      root: b.root.replace(/font-family:[^;]+;/, `font-family:'SF Pro Display','SF Pro Text',-apple-system,BlinkMacSystemFont,'PingFang SC','Helvetica Neue',sans-serif;`).replace("color:#3f3f3f", "color:#1d1d1f").replace("letter-spacing:0.05em", "letter-spacing:0.01em"),
+      p: `margin:1.2em 0;font-size:${o.fontSize + 1}px;line-height:1.8;color:#1d1d1f;`,
+      strong: `font-weight:600;color:#1d1d1f;`,
+      a: `color:${o.color};text-decoration:none;border-bottom:none;`,
+      h1: `margin:1.2em 0 0.8em;font-size:${s.h1 + 14}px;font-weight:700;color:#1d1d1f;text-align:center;line-height:1.15;letter-spacing:-0.01em;`,
+      h2: `margin:3em 0 1em;font-size:${s.h2 + 9}px;font-weight:700;color:#1d1d1f;text-align:center;line-height:1.2;`,
+      "span.wx-h-num": `display:block;font-size:13px;font-weight:600;color:#86868b;letter-spacing:0.2em;margin-bottom:10px;`,
+      h3: `margin:2em 0 0.6em;font-size:${s.h3 + 3}px;font-weight:600;color:#1d1d1f;`,
+      "h4, h5, h6": `margin:1.6em 0 0.4em;font-size:${s.h4}px;font-weight:600;color:#86868b;`,
+      blockquote: `margin:2.4em 0;padding:0 8px;border:none;text-align:center;`,
+      "blockquote p": `margin:0.4em 0;font-size:${o.fontSize + 6}px;line-height:1.5;font-weight:600;color:#1d1d1f;`,
+      "code.wx-inline": `font-family:${MONO};font-size:88%;color:#1d1d1f;background:#f5f5f7;padding:2px 6px;border-radius:6px;margin:0 2px;word-break:break-all;`,
+      "section.wx-codeblock": `margin:1.8em 0;border-radius:18px;overflow:hidden;text-align:left;`,
+      img: `max-width:100%;height:auto;display:block;margin:0 auto;border-radius:18px;`,
+      "section.wx-img": `margin:2.2em 0;text-align:center;`,
+      "figcaption, .wx-caption": `display:block;text-align:center;color:#86868b;font-size:${o.fontSize - 2}px;margin-top:10px;`,
+      hr: `border:none;border-top:1px solid #d2d2d7;margin:3em 0;height:0;`,
+      th: `border:none;border-bottom:1px solid #d2d2d7;padding:10px;background:transparent;font-weight:600;text-align:left;`,
+      td: `border:none;border-bottom:1px solid #e8e8ed;padding:10px;`,
+      "section.wx-callout": `margin:1.6em 0;padding:18px 20px;border-radius:18px;border-left:none;background:#f5f5f7;`,
+    }),
+  },
+  {
+    // 少数派：红色竖条标题、“· · ·”分隔、文末 END
+    id: "sspai",
+    name: "少数派风",
+    defaultColor: "#d71a1b",
+    group: "网页风格",
+    decor: { hr: "· · ·", ending: "— END —" },
+    build: (o, s, b) => ({
+      root: b.root.replace("color:#3f3f3f", "color:#292525"),
+      p: `margin:1.3em 0;font-size:${o.fontSize + 1}px;line-height:1.85;color:#292525;`,
+      strong: `font-weight:bold;color:#292525;border-bottom:2px solid ${o.color}99;`,
+      h1: `margin:1.4em 0 1em;font-size:${s.h1 + 2}px;font-weight:bold;color:#292525;`,
+      h2: `margin:2.2em 0 1em;font-size:${s.h2 + 1}px;font-weight:bold;color:#292525;border-left:4px solid ${o.color};padding-left:12px;line-height:1.4;`,
+      h3: `margin:1.8em 0 0.8em;font-size:${s.h3}px;font-weight:bold;color:#292525;`,
+      "h3 > span.wx-h": `border-bottom:2px solid ${o.color};padding-bottom:2px;`,
+      "h4, h5, h6": `margin:1.4em 0 0.6em;font-size:${s.h4}px;font-weight:bold;color:#292525;`,
+      blockquote: `margin:1.4em 0;padding:12px 18px;background:#f7f7f7;border-left:3px solid #c4c4c4;color:#5d5d5d;`,
+      "blockquote p": `margin:0.4em 0;color:#5d5d5d;`,
+      "section.wx-hr": `text-align:center;color:${o.color};letter-spacing:0.8em;margin:2.2em 0;font-size:20px;line-height:1;`,
+      "section.wx-ending": `text-align:center;color:#8e8787;font-size:13px;letter-spacing:0.3em;margin:3em 0 1em;`,
+    }),
+  },
+  {
+    // 新野兽派（Neo-Brutalism，Gumroad 一类）：粗黑描边、硬投影、高饱和黄/粉
+    id: "brutal",
+    name: "新野兽派",
+    defaultColor: "#ffd23f",
+    group: "网页风格",
+    build: (o, s, b) => ({
+      root: b.root.replace("color:#3f3f3f", "color:#111"),
+      p: `margin:1.2em 0;font-size:${o.fontSize}px;line-height:1.8;color:#111;`,
+      strong: `font-weight:900;color:#000;background:${o.color};padding:0 3px;`,
+      a: `color:#000;text-decoration:none;border-bottom:2px solid #000;`,
+      mark: `background:#ff90e8;color:#000;padding:0 3px;`,
+      h1: `margin:1em 0 1.2em;font-size:${s.h1 + 2}px;font-weight:900;color:#000;text-align:center;background:${o.color};border:3px solid #000;box-shadow:6px 6px 0 #000;padding:14px 10px;`,
+      h2: `margin:2.2em 0 1.2em;font-size:${s.h2}px;font-weight:900;color:#000;`,
+      "h2 > span.wx-h": `display:inline-block;background:#ff90e8;border:2px solid #000;box-shadow:4px 4px 0 #000;padding:4px 14px;`,
+      h3: `margin:1.8em 0 0.8em;font-size:${s.h3}px;font-weight:900;color:#000;`,
+      "h3 > span.wx-h": `background:linear-gradient(transparent 55%, ${o.color} 55%);padding:0 2px;`,
+      "h4, h5, h6": `margin:1.4em 0 0.6em;font-size:${s.h4}px;font-weight:900;color:#000;`,
+      blockquote: `margin:1.6em 6px 1.6em 0;padding:12px 16px;background:#90e0ff;border:2px solid #000;box-shadow:5px 5px 0 #000;color:#000;`,
+      "blockquote p": `margin:0.4em 0;color:#000;`,
+      "code.wx-inline": `font-family:${MONO};font-size:88%;color:#000;background:#fff;border:1.5px solid #000;padding:1px 4px;margin:0 2px;word-break:break-all;`,
+      "section.wx-codeblock": `margin:1.6em 6px 1.6em 0;border:2px solid #000;box-shadow:5px 5px 0 #000;border-radius:0;overflow:hidden;text-align:left;`,
+      img: `max-width:100%;height:auto;display:block;margin:0 auto;border:2px solid #000;box-shadow:5px 5px 0 #000;border-radius:0;`,
+      "section.wx-img": `margin:1.6em 6px 1.6em 0;text-align:center;`,
+      hr: `border:none;border-top:3px solid #000;margin:2em 0;height:0;`,
+      "section.wx-table": `margin:1.6em 6px 1.6em 0;overflow-x:auto;`,
+      table: `border-collapse:collapse;width:100%;font-size:${o.fontSize - 2}px;border:2px solid #000;`,
+      th: `border:2px solid #000;padding:8px 10px;background:${o.color};font-weight:900;text-align:left;color:#000;`,
+      td: `border:2px solid #000;padding:8px 10px;color:#000;`,
+      "section.wx-callout": `margin:1.6em 6px 1.6em 0;padding:12px 16px;border:2px solid #000;box-shadow:5px 5px 0 #000;border-radius:0;`,
+    }),
+  },
+  {
+    // 小红书：emoji 标题、胶囊色块、大圆角卡片
+    id: "xhs",
+    name: "小红书风",
+    defaultColor: "#ff2442",
+    group: "网页风格",
+    decor: { headingPrefix: { h2: "📌 ", h3: "✨ " }, hr: "✿  ✿  ✿", ending: "— 完 —" },
+    build: (o, s) => ({
+      p: `margin:1.1em 0;font-size:${o.fontSize}px;line-height:1.9;color:#333;`,
+      strong: `font-weight:bold;color:${o.color};`,
+      mark: `background:${o.color}22;color:inherit;padding:0 3px;border-radius:3px;`,
+      h1: `margin:1.2em 0 1em;font-size:${s.h1}px;font-weight:bold;color:#333;text-align:center;`,
+      "h1 > span.wx-h": `background:linear-gradient(transparent 60%, ${o.color}33 60%);padding:0 4px;`,
+      h2: `display:table;margin:2em 0 1em;font-size:${s.h2 - 1}px;font-weight:bold;color:${o.color};background:${o.color}14;padding:6px 16px;border-radius:20px;`,
+      h3: `margin:1.6em 0 0.8em;font-size:${s.h3 - 1}px;font-weight:bold;color:#333;`,
+      "h4, h5, h6": `margin:1.4em 0 0.6em;font-size:${s.h4}px;font-weight:bold;color:#333;`,
+      blockquote: `margin:1.2em 0;padding:12px 16px;background:#fff5f6;border:none;border-radius:14px;color:#666;`,
+      "blockquote p": `margin:0.4em 0;color:#666;`,
+      "code.wx-inline": `font-family:${MONO};font-size:90%;color:${o.color};background:${o.color}12;padding:2px 5px;border-radius:6px;margin:0 2px;word-break:break-all;`,
+      "section.wx-codeblock": `margin:1.2em 0;border-radius:14px;overflow:hidden;text-align:left;`,
+      img: `max-width:100%;height:auto;display:block;margin:0 auto;border-radius:14px;`,
+      "section.wx-callout": `margin:1.2em 0;padding:12px 16px;border-radius:14px;border-left:none;`,
+      "section.wx-hr": `text-align:center;color:${o.color}99;letter-spacing:0.3em;margin:2em 0;font-size:14px;line-height:1;`,
+      "section.wx-ending": `text-align:center;color:${o.color};font-size:13px;letter-spacing:0.3em;margin:2.4em 0 1em;`,
+    }),
+  },
+  {
+    // 日系杂志（Kinfolk 一类）：衬线、细字号大编号、克制的大地色、居中引号
+    id: "kinfolk",
+    name: "日系杂志",
+    defaultColor: "#a68a64",
+    group: "网页风格",
+    decor: { h2Number: true, headingPrefix: { h3: "— " }, quoteMark: "“", hr: "◇", ending: "FIN." },
+    build: (o, s, b) => ({
+      root: b.root.replace(/font-family:[^;]+;/, `font-family:${SERIF};`).replace("color:#3f3f3f", "color:#3a3a3a").replace("letter-spacing:0.05em", "letter-spacing:0.08em"),
+      p: `margin:1.4em 0;font-size:${o.fontSize}px;line-height:2.1;color:#3a3a3a;text-align:justify;`,
+      strong: `font-weight:600;color:#3a3a3a;`,
+      a: `color:${o.color};text-decoration:none;border-bottom:1px solid ${o.color}88;`,
+      h1: `margin:1.4em 0 1.4em;font-size:${s.h1}px;font-weight:500;color:#2a2a2a;text-align:center;letter-spacing:0.25em;`,
+      h2: `margin:3em 0 1.4em;font-size:${s.h2 - 1}px;font-weight:500;color:#2a2a2a;text-align:center;letter-spacing:0.2em;`,
+      "span.wx-h-num": `display:block;font-family:Georgia,'Times New Roman',serif;font-size:40px;font-weight:300;font-style:italic;color:${o.color};line-height:1.1;margin-bottom:10px;letter-spacing:0.05em;`,
+      h3: `margin:2em 0 0.8em;font-size:${s.h3 - 1}px;font-weight:500;color:#555;letter-spacing:0.15em;`,
+      "span.wx-h-pre": `color:${o.color};`,
+      "h4, h5, h6": `margin:1.6em 0 0.6em;font-size:${s.h4 - 1}px;font-weight:500;color:#666;letter-spacing:0.1em;`,
+      blockquote: `margin:2.4em 1em;padding:0;border:none;text-align:center;color:#777;`,
+      "blockquote p": `margin:0.3em 0;color:#777;font-style:italic;text-align:center;`,
+      "section.wx-quote-mark": `font-family:Georgia,serif;font-size:48px;line-height:1;height:30px;color:${o.color};`,
+      "code.wx-inline": `font-family:${MONO};font-size:88%;color:#6b5a45;background:#f4efe8;padding:2px 5px;border-radius:2px;margin:0 2px;word-break:break-all;`,
+      "section.wx-codeblock": `margin:1.8em 0;border-radius:2px;overflow:hidden;text-align:left;`,
+      img: `max-width:100%;height:auto;display:block;margin:0 auto;border-radius:0;`,
+      "section.wx-img": `margin:2.4em 0;text-align:center;`,
+      "figcaption, .wx-caption": `display:block;text-align:center;color:#999;font-size:${o.fontSize - 3}px;margin-top:10px;font-style:italic;letter-spacing:0.1em;`,
+      "section.wx-hr": `text-align:center;color:${o.color};margin:2.6em 0;font-size:14px;line-height:1;`,
+      "section.wx-ending": `text-align:center;color:${o.color};font-family:Georgia,serif;font-style:italic;font-size:16px;letter-spacing:0.2em;margin:3em 0 1em;`,
+      th: `border:none;border-bottom:1px solid #c9bda9;padding:8px 10px;background:transparent;font-weight:500;text-align:left;`,
+      td: `border:none;border-bottom:1px solid #eee6da;padding:8px 10px;`,
+    }),
+  },
+  {
+    // 赛博朋克：深紫底卡片、霓虹粉/青发光标题、黄色重点
+    id: "cyber",
+    name: "赛博朋克",
+    defaultColor: "#ff2bd6",
+    group: "网页风格",
+    decor: { headingPrefix: { h2: "// ", h3: "> " } },
+    build: (o, s, b) => ({
+      root: b.root.replace("color:#3f3f3f", "color:#d7d7f5") + "background:#140f2e;padding:22px 16px;border-radius:10px;",
+      p: `margin:1.2em 0;font-size:${o.fontSize}px;line-height:1.8;color:#d7d7f5;`,
+      strong: `font-weight:bold;color:#fcee0a;`,
+      em: `font-style:italic;color:#c9c9ff;`,
+      a: `color:#00f0ff;text-decoration:none;border-bottom:1px solid #00f0ff;`,
+      mark: `background:${o.color}40;color:#fff;padding:0 2px;`,
+      h1: `margin:0.6em 0 1em;font-size:${s.h1}px;font-weight:bold;color:#00f0ff;text-align:center;letter-spacing:0.12em;text-shadow:0 0 8px rgba(0,240,255,0.8);`,
+      h2: `margin:2em 0 1em;font-size:${s.h2}px;font-weight:bold;color:${o.color};border-bottom:1px solid ${o.color};padding-bottom:6px;text-shadow:0 0 6px ${o.color};font-family:${MONO};`,
+      h3: `margin:1.6em 0 0.8em;font-size:${s.h3}px;font-weight:bold;color:#00f0ff;font-family:${MONO};`,
+      "h4, h5, h6": `margin:1.4em 0 0.6em;font-size:${s.h4}px;font-weight:bold;color:#c9c9ff;`,
+      ul: `margin:1em 0;padding-left:1.6em;list-style-type:square;color:#d7d7f5;`,
+      ol: `margin:1em 0;padding-left:1.6em;list-style-type:decimal;color:#d7d7f5;`,
+      blockquote: `margin:1.2em 0;padding:10px 16px;border-left:3px solid #00f0ff;background:rgba(0,240,255,0.07);color:#b8b8e0;`,
+      "blockquote p": `margin:0.4em 0;color:#b8b8e0;`,
+      "code.wx-inline": `font-family:${MONO};font-size:90%;color:#fcee0a;background:rgba(252,238,10,0.1);padding:2px 5px;border-radius:3px;margin:0 2px;word-break:break-all;`,
+      "section.wx-codeblock": `margin:1.4em 0;border:1px solid ${o.color};border-radius:6px;box-shadow:0 0 12px ${o.color}66;overflow:hidden;text-align:left;`,
+      img: `max-width:100%;height:auto;display:block;margin:0 auto;border-radius:4px;border:1px solid #3b2e7a;`,
+      hr: `border:none;border-top:1px solid #3b2e7a;margin:2em 0;height:0;`,
+      th: `border:1px solid #3b2e7a;padding:6px 10px;background:#1c1446;color:#00f0ff;font-weight:bold;text-align:left;`,
+      td: `border:1px solid #3b2e7a;padding:6px 10px;color:#d7d7f5;`,
+      "figcaption, .wx-caption": `display:block;text-align:center;color:#8888b0;font-size:${o.fontSize - 3}px;margin-top:6px;`,
+      "section.wx-footnotes": `margin-top:2.5em;font-size:${o.fontSize - 3}px;color:#8888b0;`,
+      "section.wx-footnotes p": `margin:0.3em 0;font-size:${o.fontSize - 3}px;color:#8888b0;line-height:1.6;word-break:break-all;`,
+      "section.wx-footnotes-title": `font-weight:bold;color:#c9c9ff;margin-bottom:0.6em;font-size:${o.fontSize - 1}px;`,
+      "section.wx-callout p": `margin:0.4em 0;color:#d7d7f5;`,
+    }),
+  },
+  {
+    // Material Design 3：色块标题卡、带阴影的卡片、大圆角
+    id: "material",
+    name: "Material 卡片",
+    defaultColor: "#6750a4",
+    group: "网页风格",
+    build: (o, s, b) => ({
+      root: b.root.replace(/font-family:[^;]+;/, `font-family:Roboto,'Google Sans',-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;`).replace("color:#3f3f3f", "color:#1d1b20"),
+      p: `margin:1.1em 0;font-size:${o.fontSize}px;line-height:1.75;color:#1d1b20;`,
+      strong: `font-weight:bold;color:${o.color};`,
+      h1: `margin:1em 0 1em;font-size:${s.h1 + 2}px;font-weight:500;color:#1d1b20;text-align:center;`,
+      h2: `margin:2em 0 1em;font-size:${s.h2}px;font-weight:500;color:#fff;background:${o.color};border-radius:16px;padding:12px 18px;box-shadow:0 1px 3px rgba(0,0,0,0.3),0 4px 8px rgba(0,0,0,0.12);`,
+      h3: `margin:1.6em 0 0.8em;font-size:${s.h3}px;font-weight:500;color:${o.color};`,
+      "h4, h5, h6": `margin:1.4em 0 0.6em;font-size:${s.h4}px;font-weight:500;color:#49454f;`,
+      blockquote: `margin:1.4em 2px;padding:14px 18px;background:#fff;border:none;border-radius:16px;box-shadow:0 1px 3px rgba(0,0,0,0.2),0 4px 10px rgba(0,0,0,0.08);color:#49454f;`,
+      "blockquote p": `margin:0.4em 0;color:#49454f;`,
+      "code.wx-inline": `font-family:${MONO};font-size:88%;color:${o.color};background:${o.color}14;padding:2px 6px;border-radius:8px;margin:0 2px;word-break:break-all;`,
+      "section.wx-codeblock": `margin:1.4em 2px;border-radius:16px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.3),0 4px 10px rgba(0,0,0,0.12);text-align:left;`,
+      img: `max-width:100%;height:auto;display:block;margin:0 auto;border-radius:16px;box-shadow:0 1px 3px rgba(0,0,0,0.2),0 4px 10px rgba(0,0,0,0.08);`,
+      th: `border:none;border-bottom:1px solid #cac4d0;padding:10px;background:${o.color}14;font-weight:500;text-align:left;color:#1d1b20;`,
+      td: `border:none;border-bottom:1px solid #e7e0ec;padding:10px;`,
+      "section.wx-callout": `margin:1.4em 2px;padding:14px 18px;border-radius:16px;border-left:none;box-shadow:0 1px 3px rgba(0,0,0,0.15);`,
+    }),
+  },
 ];
 
 export function buildTheme(id: string, o: ThemeOptions): Theme {
   const def = DEFS.find((d) => d.id === id) ?? DEFS[0];
   const b = base(o);
-  return { id: def.id, name: def.name, styles: { ...b, ...def.build(o, headingSizes(o.fontSize), b) } };
+  return {
+    id: def.id,
+    name: def.name,
+    styles: { ...b, ...def.build(o, headingSizes(o.fontSize), b) },
+    decor: def.decor ?? {},
+  };
 }
 
-export const THEMES: { id: string; name: string; defaultColor: string }[] = DEFS.map(({ id, name, defaultColor }) => ({
-  id,
-  name,
-  defaultColor,
-}));
+export const THEMES: { id: string; name: string; defaultColor: string; group: ThemeGroup }[] = DEFS.map(
+  ({ id, name, defaultColor, group }) => ({ id, name, defaultColor, group: group ?? "经典" }),
+);
 
 export const CODE_THEMES: Record<CodeThemeId, CodeTheme> = {
   "one-dark": {

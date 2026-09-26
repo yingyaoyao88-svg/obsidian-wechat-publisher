@@ -117,7 +117,7 @@ export class WechatSettingTab extends PluginSettingTab {
 
     containerEl.createEl("h3", { text: "排版" });
     new Setting(containerEl).setName("主题").addDropdown((d) => {
-      THEMES.forEach((t) => d.addOption(t.id, t.name));
+      THEMES.forEach((t) => d.addOption(t.id, `${t.group} · ${t.name}`));
       d.setValue(s.themeId).onChange(async (v) => {
         s.themeId = v;
         s.themeColor = THEMES.find((t) => t.id === v)?.defaultColor ?? s.themeColor;

@@ -50,4 +50,18 @@ for (const t of THEMES) {
   gallery += `<div style="width:400px;flex:none;border:1px solid #ddd;padding:8px"><div style="font:bold 14px sans-serif;margin-bottom:6px">${t.name}（${t.id}）</div>${r.html}</div>`;
 }
 writeFileSync(new URL("./.build/gallery.html", import.meta.url), `<meta charset=utf-8><body style="display:flex;flex-wrap:wrap;gap:12px;width:1700px">${gallery}</body>`);
+// 结构装饰确实插入了
+const renderWith = (id) => renderForWechat(md, {
+  themeId: id, themeColor: THEMES.find((t) => t.id === id).defaultColor, fontSize: 15, codeTheme: "one-dark",
+  macCodeBlock: true, linkToFootnote: true, imageCaption: true, resolveImage: async (s) => s,
+  parseHTML: (h) => new JSDOM(h).window.document,
+});
+const xhs = (await renderWith("xhs")).html;
+assert.ok(xhs.includes("📌 ") && xhs.includes("✨ ") && xhs.includes("✿") && xhs.includes("— 完 —"), "小红书风装饰");
+assert.ok(xhs.indexOf("— 完 —") < xhs.indexOf("参考链接"), "结束标记应在参考链接之前");
+const kin = (await renderWith("kinfolk")).html;
+assert.ok(kin.includes(">01<") && kin.includes(">02<") && kin.includes("“") && kin.includes("FIN."), "日系杂志编号/引号/结尾");
+assert.ok(!kin.includes("<hr"), "hr 已替换成文字分隔");
+const brutal = (await renderWith("brutal")).html;
+assert.ok(brutal.includes("box-shadow:5px 5px 0 #000"), "新野兽派代码框硬投影");
 console.log(`themes ok: ${THEMES.length} 个主题`);

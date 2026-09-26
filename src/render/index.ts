@@ -1,7 +1,7 @@
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js/lib/common";
 import { preprocessObsidian } from "./preprocess";
-import { buildTheme, CODE_THEMES, CodeThemeId, MONO } from "./theme";
+import { buildTheme, CODE_THEMES, CodeThemeId, MONO, ThemeDecor } from "./theme";
 
 export { THEMES, CODE_THEMES } from "./theme";
 export { stripFrontmatter } from "./preprocess";
@@ -129,11 +129,8 @@ function transformCodeBlocks(root: Element, doc: Document, opts: RenderOptions) 
     normalizeCodeWhitespace(code, doc);
 
     const wrapper = doc.createElement("section");
-    wrapper.setAttribute(
-      "style",
-      `margin:1.2em 0;border-radius:8px;background:${ct.background};overflow:hidden;` +
-        `box-shadow:0 2px 8px rgba(0,0,0,0.12);text-align:left;`,
-    );
+    wrapper.className = "wx-codeblock"; // 外框圆角/阴影/边框由主题决定
+    wrapper.setAttribute("style", `background:${ct.background};`);
     if (opts.macCodeBlock) {
       const header = doc.createElement("section");
       header.setAttribute("style", `padding:10px 12px 0;background:${ct.background};line-height:1;`);
@@ -322,6 +319,56 @@ function transformMisc(root: Element, doc: Document) {
   });
 }
 
+// ---------------------------------------------------------------- 主题装饰
+
+function applyDecor(root: Element, doc: Document, decor: ThemeDecor) {
+  const span = (cls: string, text: string) => {
+    const el = doc.createElement("span");
+    el.className = cls;
+    el.textContent = text;
+    return el;
+  };
+  const section = (cls: string, text: string) => {
+    const el = doc.createElement("section");
+    el.className = cls;
+    el.textContent = text;
+    return el;
+  };
+
+  (["h1", "h2", "h3", "h4"] as const).forEach((level) => {
+    const pre = decor.headingPrefix?.[level];
+    const suf = decor.headingSuffix?.[level];
+    root.querySelectorAll(level).forEach((h) => {
+      const content = h.querySelector("span.wx-h");
+      if (!content) return;
+      if (pre) h.insertBefore(span("wx-h-pre", pre), content);
+      if (suf) h.appendChild(span("wx-h-suf", suf));
+    });
+  });
+
+  if (decor.h2Number) {
+    root.querySelectorAll("h2").forEach((h, i) => {
+      h.insertBefore(span("wx-h-num", String(i + 1).padStart(2, "0")), h.firstChild);
+    });
+  }
+
+  if (decor.quoteMark) {
+    root.querySelectorAll("blockquote").forEach((bq) => {
+      bq.insertBefore(section("wx-quote-mark", decor.quoteMark!), bq.firstChild);
+    });
+  }
+
+  if (decor.hr) {
+    root.querySelectorAll("hr").forEach((hr) => hr.parentNode!.replaceChild(section("wx-hr", decor.hr!), hr));
+  }
+
+  if (decor.ending) {
+    // 放在“参考链接”之前
+    const notes = Array.from(root.children).find((c) => c.classList.contains("wx-footnotes"));
+    root.insertBefore(section("wx-ending", decor.ending), notes ?? null);
+  }
+}
+
 // ---------------------------------------------------------------- 样式内联
 
 function applyTheme(root: Element, styles: Record<string, string>) {
@@ -374,6 +421,7 @@ export async function renderForWechat(source: string, opts: RenderOptions): Prom
   transformMisc(root, doc);
 
   const theme = buildTheme(opts.themeId, { color: opts.themeColor, fontSize: opts.fontSize });
+  applyDecor(root, doc, theme.decor);
   applyTheme(root, theme.styles);
   cleanAttributes(root);
 

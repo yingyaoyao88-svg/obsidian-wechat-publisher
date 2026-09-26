@@ -39,7 +39,10 @@ export class WechatPreviewView extends ItemView {
 
     const bar = root.createDiv({ cls: "wechat-publisher-toolbar" });
     const themeSel = bar.createEl("select", { cls: "dropdown" });
-    THEMES.forEach((t) => themeSel.createEl("option", { value: t.id, text: t.name }));
+    for (const group of [...new Set(THEMES.map((t) => t.group))]) {
+      const og = themeSel.createEl("optgroup", { attr: { label: group } });
+      THEMES.filter((t) => t.group === group).forEach((t) => og.createEl("option", { value: t.id, text: t.name }));
+    }
     themeSel.value = this.plugin.settings.themeId;
     themeSel.onchange = async () => {
       this.plugin.settings.themeId = themeSel.value;
