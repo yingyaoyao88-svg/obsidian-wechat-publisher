@@ -1,0 +1,25 @@
+{
+  "name": "obsidian-wechat-publisher",
+  "version": "0.1.0",
+  "description": "一键把 Obsidian 笔记排版并发布到微信公众号草稿箱",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production",
+    "test": "node esbuild.config.mjs test && node test/render.test.mjs"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/markdown-it": "^14.2.0",
+    "@types/node": "^26.6.3",
+    "builtin-modules": "^3.3.0",
+    "esbuild": "^0.28.2",
+    "jsdom": "^30.1.1",
+    "obsidian": "^1.13.1",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "highlight.js": "^11.12.0",
+    "markdown-it": "^15.0.2"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "id": "wechat-publisher",
+  "name": "WeChat Publisher",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "把当前笔记转换为公众号样式（内联样式、代码高亮、图片上传、封面），一键推送到公众号草稿箱或复制到公众号编辑器。",
+  "author": "yingyaoyao88",
+  "isDesktopOnly": true
+}
