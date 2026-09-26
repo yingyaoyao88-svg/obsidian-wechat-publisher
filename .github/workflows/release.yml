@@ -1,0 +1,48 @@
+name: Release
+
+# 推送版本号标签（如 0.1.0，与 manifest.json 的 version 一致）时，
+# 自动测试、构建，并把 Obsidian 需要的三个文件发布到 GitHub Release。
+on:
+  push:
+    tags:
+      - "*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+      - name: Check tag matches manifest version
+        run: |
+          v=$(node -p "require('./manifest.json').version")
+          if [ "$v" != "${GITHUB_REF_NAME}" ]; then
+            echo "标签 ${GITHUB_REF_NAME} 与 manifest.json 版本 $v 不一致"; exit 1
+          fi
+
+      - name: Package
+        run: |
+          mkdir wechat-publisher
+          cp main.js manifest.json styles.css wechat-publisher/
+          zip -r wechat-publisher-${GITHUB_REF_NAME}.zip wechat-publisher
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "下载 wechat-publisher-${GITHUB_REF_NAME}.zip，解压到 <你的库>/.obsidian/plugins/ 下即可，详见 README。" \
+            main.js manifest.json styles.css wechat-publisher-${GITHUB_REF_NAME}.zip
