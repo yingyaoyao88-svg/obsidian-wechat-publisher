@@ -210,7 +210,7 @@ npm run dev    # 监听构建
 npm test       # 渲染层单元测试（Node + jsdom，不依赖 Obsidian）
 ```
 
-发布新版本：同步修改 `manifest.json`、`package.json` 的 `version` 并在 `versions.json` 加一行，提交后推送同名标签（如 `git tag 0.2.0 && git push origin 0.2.0`），GitHub Actions 会自动测试、构建并创建 Release。
+发布新版本：同步修改 `manifest.json`、`package.json` 的 `version` 并在 `versions.json` 加一行，提交到 `main` 后，到仓库的 **Actions → Release → Run workflow** 手动运行（或推送同名标签 `git tag 0.2.0 && git push origin 0.2.0`），会自动测试、构建、打标签并创建 Release。
 
 ```
 src/

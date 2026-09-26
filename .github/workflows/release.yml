@@ -1,11 +1,14 @@
 name: Release
 
-# 推送版本号标签（如 0.1.0，与 manifest.json 的 version 一致）时，
-# 自动测试、构建，并把 Obsidian 需要的三个文件发布到 GitHub Release。
+# 两种触发方式：
+#   1. 推送版本号标签（如 0.1.0，需与 manifest.json 的 version 一致）
+#   2. 在 GitHub 的 Actions 页面手动运行（Run workflow）：按 manifest.json 的 version 自动打标签
+# 流程：测试 → 构建 → 把 Obsidian 需要的三个文件和打包好的 zip 发布到 GitHub Release。
 on:
   push:
     tags:
       - "*"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -25,24 +28,27 @@ jobs:
       - run: npm test
       - run: npm run build
 
-      - name: Check tag matches manifest version
+      - name: Resolve version
         run: |
           v=$(node -p "require('./manifest.json').version")
-          if [ "$v" != "${GITHUB_REF_NAME}" ]; then
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "$v" != "${GITHUB_REF_NAME}" ]; then
             echo "标签 ${GITHUB_REF_NAME} 与 manifest.json 版本 $v 不一致"; exit 1
           fi
+          echo "VERSION=$v" >> "$GITHUB_ENV"
 
       - name: Package
         run: |
           mkdir wechat-publisher
           cp main.js manifest.json styles.css wechat-publisher/
-          zip -r wechat-publisher-${GITHUB_REF_NAME}.zip wechat-publisher
+          zip -r wechat-publisher-${VERSION}.zip wechat-publisher
 
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            --title "${GITHUB_REF_NAME}" \
-            --notes "下载 wechat-publisher-${GITHUB_REF_NAME}.zip，解压到 <你的库>/.obsidian/plugins/ 下即可，详见 README。" \
-            main.js manifest.json styles.css wechat-publisher-${GITHUB_REF_NAME}.zip
+          # 手动运行时标签还不存在，gh 会在当前提交上创建
+          gh release create "${VERSION}" \
+            --target "${GITHUB_SHA}" \
+            --title "${VERSION}" \
+            --notes "下载 wechat-publisher-${VERSION}.zip，解压到 <你的库>/.obsidian/plugins/ 下即可，详见 README。" \
+            main.js manifest.json styles.css wechat-publisher-${VERSION}.zip
