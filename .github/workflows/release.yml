@@ -38,9 +38,12 @@ jobs:
 
       - name: Package
         run: |
-          mkdir wechat-publisher
-          cp main.js manifest.json styles.css wechat-publisher/
-          zip -r wechat-publisher-${VERSION}.zip wechat-publisher
+          # 文件夹名必须等于 manifest.json 的 id
+          id=$(node -p "require('./manifest.json').id")
+          mkdir "$id"
+          cp main.js manifest.json styles.css "$id/"
+          zip -r "$id-${VERSION}.zip" "$id"
+          echo "PLUGIN_ID=$id" >> "$GITHUB_ENV"
 
       - name: Create release
         env:
@@ -50,5 +53,5 @@ jobs:
           gh release create "${VERSION}" \
             --target "${GITHUB_SHA}" \
             --title "${VERSION}" \
-            --notes "下载 wechat-publisher-${VERSION}.zip，解压到 <你的库>/.obsidian/plugins/ 下即可，详见 README。" \
-            main.js manifest.json styles.css wechat-publisher-${VERSION}.zip
+            --notes "下载 ${PLUGIN_ID}-${VERSION}.zip，解压到 <你的库>/.obsidian/plugins/ 下即可，详见 README。" \
+            main.js manifest.json styles.css ${PLUGIN_ID}-${VERSION}.zip

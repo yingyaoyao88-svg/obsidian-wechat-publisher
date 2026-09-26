@@ -42,3 +42,16 @@ function hello(name: string) {
 
 %%隐藏注释%%
 行内代码不处理 `[[x]] ==y==`
+
+公式：质能方程 $E=mc^2$，价格 $5 和 $10 不是公式，转义 \$x\$ 也不是。
+
+$$
+\int_0^1 x^2\,dx = \frac{1}{3}
+$$
+
+```mermaid
+graph TD
+  A[开始] --> B[结束]
+```
+
+后台链接 [素材库](https://mp.weixin.qq.com/cgi-bin/appmsg?t=media)。

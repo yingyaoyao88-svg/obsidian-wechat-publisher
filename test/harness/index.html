@@ -1,0 +1,19 @@
+<!doctype html><meta charset="utf-8">
+<style>
+:root{--background-primary:#fff;--background-secondary:#f6f6f6;--background-modifier-border:#e0e0e0;--background-modifier-hover:#f0f0f0;--interactive-accent:#7c5cff;--text-on-accent:#fff;--text-normal:#222;--text-muted:#666;--text-faint:#999;--text-accent:#7c5cff;--text-warning:#d97706;--color-green:#16a34a;--color-red:#dc2626;--font-ui-small:13px;--font-ui-smaller:12px;--font-monospace:Menlo,monospace;--shadow-l:0 8px 24px rgba(0,0,0,.15)}
+body{margin:0;font:14px -apple-system,"PingFang SC","Noto Sans CJK SC",sans-serif;color:var(--text-normal);background:#ddd}
+#host{width:460px;height:900px;display:flex;flex-direction:column;border-right:1px solid #ccc}
+#host>div{flex:1;min-height:0;height:100%}
+button{font:inherit;font-size:13px;padding:4px 10px;height:28px;border-radius:6px;border:1px solid var(--background-modifier-border);background:#fff;cursor:pointer;color:inherit}
+button.mod-cta{background:var(--interactive-accent);color:#fff;border-color:transparent}button.mod-warning{color:var(--color-red)}
+.modal-container{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center}
+.modal{background:#fff;border-radius:12px;padding:18px 20px;max-height:90vh;overflow:auto;width:560px}
+.modal-title{font-weight:700;font-size:17px;margin-bottom:10px}
+.setting-item{display:flex;gap:12px;align-items:center;padding:8px 0;border-top:1px solid #eee}.setting-item-info{flex:1}
+.setting-item-name{font-weight:500}.setting-item-description{color:var(--text-muted);font-size:12px}
+.setting-item-control{display:flex;gap:6px}input[type=text],textarea{font:inherit;padding:4px 8px;border:1px solid #ccc;border-radius:6px}
+.checkbox-container{width:36px;height:20px;border-radius:10px;background:#ccc}
+</style>
+<link rel="stylesheet" href="../../styles.css">
+<div id="host"></div>
+<script src="bundle.js"></script>

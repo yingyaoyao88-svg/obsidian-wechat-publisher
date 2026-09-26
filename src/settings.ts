@@ -1,17 +1,27 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type WechatPublisherPlugin from "./main";
-import { THEMES } from "./render";
-import type { CodeThemeId } from "./render/theme";
+import { LAYOUTS, THEMES } from "./render";
+import type { CodeThemeId, LayoutId } from "./render/theme";
 
-export interface WechatSettings {
+export interface WechatAccount {
+  id: string;
+  /** 自定义名称，如“主号”“备用号” */
+  name: string;
   appId: string;
   appSecret: string;
-  defaultAuthor: string;
-  /** frontmatter 和正文里都没有图片时使用的默认封面（库内路径） */
+  /** 该账号的默认作者 */
+  author: string;
+  /** 该账号的默认封面（库内图片路径） */
   defaultCover: string;
+}
+
+export interface WechatSettings {
+  accounts: WechatAccount[];
+  activeAccountId: string;
   themeId: string;
   themeColor: string;
   fontSize: number;
+  layout: LayoutId;
   codeTheme: CodeThemeId;
   macCodeBlock: boolean;
   linkToFootnote: boolean;
@@ -19,16 +29,19 @@ export interface WechatSettings {
   openComment: boolean;
   updateExistingDraft: boolean;
   openBrowserAfterPublish: boolean;
+  /** 编辑器滚动时预览跟随 */
+  scrollSync: boolean;
+  /** 预览面板隐藏工具栏（沉浸预览） */
+  toolbarHidden: boolean;
 }
 
 export const DEFAULT_SETTINGS: WechatSettings = {
-  appId: "",
-  appSecret: "",
-  defaultAuthor: "",
-  defaultCover: "",
+  accounts: [],
+  activeAccountId: "",
   themeId: "default",
   themeColor: "#1e80ff",
   fontSize: 15,
+  layout: "balanced",
   codeTheme: "one-dark",
   macCodeBlock: true,
   linkToFootnote: true,
@@ -36,7 +49,41 @@ export const DEFAULT_SETTINGS: WechatSettings = {
   openComment: true,
   updateExistingDraft: true,
   openBrowserAfterPublish: true,
+  scrollSync: false,
+  toolbarHidden: false,
 };
+
+export function newAccount(partial: Partial<WechatAccount> = {}): WechatAccount {
+  return {
+    id: Math.random().toString(36).slice(2, 10),
+    name: "公众号",
+    appId: "",
+    appSecret: "",
+    author: "",
+    defaultCover: "",
+    ...partial,
+  };
+}
+
+/** 兼容 0.1.x 的单账号设置（appId/appSecret/defaultAuthor/defaultCover 在顶层） */
+export function migrateSettings(raw: Record<string, unknown> | undefined): WechatSettings {
+  const s = Object.assign({}, DEFAULT_SETTINGS, raw ?? {}) as WechatSettings & Record<string, unknown>;
+  if (!Array.isArray(s.accounts)) s.accounts = [];
+  if (!s.accounts.length && typeof s.appId === "string" && s.appId) {
+    s.accounts.push(
+      newAccount({
+        name: "默认账号",
+        appId: s.appId as string,
+        appSecret: (s.appSecret as string) ?? "",
+        author: (s.defaultAuthor as string) ?? "",
+        defaultCover: (s.defaultCover as string) ?? "",
+      }),
+    );
+  }
+  for (const k of ["appId", "appSecret", "defaultAuthor", "defaultCover"]) delete s[k];
+  if (!s.accounts.some((a) => a.id === s.activeAccountId)) s.activeAccountId = s.accounts[0]?.id ?? "";
+  return s;
+}
 
 export class WechatSettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: WechatPublisherPlugin) {
@@ -52,47 +99,21 @@ export class WechatSettingTab extends PluginSettingTab {
     };
     containerEl.empty();
 
-    containerEl.createEl("h3", { text: "公众号接口" });
-    containerEl.createEl("p", {
-      cls: "setting-item-description",
-      text:
-        "在「公众号后台 → 设置与开发 → 开发接口管理 → 基本配置」获取 AppID / AppSecret，并把本机公网 IP 加入 IP 白名单。" +
-        "注意：AppSecret 以明文保存在库的 .obsidian/plugins/wechat-publisher/data.json 中，请勿把该文件同步到公开仓库。",
-    });
-    new Setting(containerEl).setName("AppID").addText((t) =>
-      t.setValue(s.appId).onChange(async (v) => {
-        s.appId = v.trim();
-        await save();
-      }),
-    );
-    new Setting(containerEl).setName("AppSecret").addText((t) => {
-      t.inputEl.type = "password";
-      t.setValue(s.appSecret).onChange(async (v) => {
-        s.appSecret = v.trim();
-        await save();
-      });
-    });
+    containerEl.createEl("h3", { text: "公众号账号" });
+    const accounts = s.accounts.length
+      ? s.accounts.map((a) => `${a.name}${a.id === s.activeAccountId ? "（默认）" : ""}`).join("、")
+      : "还没有添加账号";
     new Setting(containerEl)
-      .setName("测试连接")
-      .setDesc("获取一次 access_token，检查 AppID/AppSecret/IP 白名单是否正确。")
-      .addButton((b) => b.setButtonText("测试").onClick(() => this.plugin.testConnection()));
-
-    containerEl.createEl("h3", { text: "文章默认值" });
-    new Setting(containerEl).setName("默认作者").addText((t) =>
-      t.setValue(s.defaultAuthor).onChange(async (v) => {
-        s.defaultAuthor = v;
-        await save();
-      }),
-    );
-    new Setting(containerEl)
-      .setName("默认封面")
-      .setDesc("库内图片路径。优先级：frontmatter 的 cover → 正文第一张图 → 此处。")
-      .addText((t) =>
-        t.setPlaceholder("assets/cover.png").setValue(s.defaultCover).onChange(async (v) => {
-          s.defaultCover = v.trim();
-          await save();
-        }),
+      .setName("账号管理")
+      .setDesc(`${accounts}。在这里添加 AppID/AppSecret、检测并复制 IP 白名单、设置默认作者和封面。`)
+      .addButton((b) =>
+        b
+          .setButtonText(s.accounts.length ? "管理账号" : "添加账号")
+          .setCta()
+          .onClick(() => this.plugin.openAccountManager(() => this.display())),
       );
+
+    containerEl.createEl("h3", { text: "发布" });
     new Setting(containerEl).setName("开启留言").addToggle((t) =>
       t.setValue(s.openComment).onChange(async (v) => {
         s.openComment = v;
@@ -116,6 +137,10 @@ export class WechatSettingTab extends PluginSettingTab {
     );
 
     containerEl.createEl("h3", { text: "排版" });
+    containerEl.createEl("p", {
+      cls: "setting-item-description",
+      text: "主题、主题色、排版模板和字号也可以在预览面板的「格式」里一键切换。",
+    });
     new Setting(containerEl).setName("主题").addDropdown((d) => {
       THEMES.forEach((t) => d.addOption(t.id, `${t.group} · ${t.name}`));
       d.setValue(s.themeId).onChange(async (v) => {
@@ -125,12 +150,22 @@ export class WechatSettingTab extends PluginSettingTab {
         this.display(); // 刷新主题色选择器
       });
     });
-    new Setting(containerEl).setName("主题色").setDesc("切换主题时会自动换成该主题的推荐色，之后可以再改。").addColorPicker((c) =>
-      c.setValue(s.themeColor).onChange(async (v) => {
-        s.themeColor = v;
+    new Setting(containerEl)
+      .setName("主题色")
+      .setDesc("切换主题时会自动换成该主题的推荐色，之后可以再改。")
+      .addColorPicker((c) =>
+        c.setValue(s.themeColor).onChange(async (v) => {
+          s.themeColor = v;
+          await save();
+        }),
+      );
+    new Setting(containerEl).setName("排版模板").addDropdown((d) => {
+      LAYOUTS.forEach((l) => d.addOption(l.id, `${l.name} — ${l.desc}`));
+      d.setValue(s.layout).onChange(async (v) => {
+        s.layout = v as LayoutId;
         await save();
-      }),
-    );
+      });
+    });
     new Setting(containerEl).setName("正文字号").addSlider((sl) =>
       sl
         .setLimits(13, 18, 1)

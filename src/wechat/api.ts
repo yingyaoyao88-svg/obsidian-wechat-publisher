@@ -1,4 +1,5 @@
 import { requestUrl } from "obsidian";
+import { parseBlockedIp } from "./parse";
 
 /**
  * 微信公众号服务端 API 的最小封装。
@@ -30,6 +31,52 @@ export class WechatApiError extends Error {
   constructor(public errcode: number, public errmsg: string, public api: string) {
     super(explain(errcode, errmsg, api));
   }
+
+  /** 40164 时微信会在 errmsg 里写出它看到的出口 IP */
+  get blockedIp(): string | null {
+    return this.errcode === 40164 ? parseBlockedIp(this.errmsg) : null;
+  }
+}
+
+
+export interface IpProbe {
+  /** 微信看到的出口 IP（优先），或公网 IP 查询服务返回的 IP */
+  ip: string | null;
+  /** 是否已在白名单（能成功拿到 access_token） */
+  whitelisted: boolean | null;
+  /** IP 来源：wechat = 微信接口实际看到的；public = 公网 IP 查询服务 */
+  source: "wechat" | "public" | null;
+  error?: string;
+}
+
+/**
+ * 检测出口 IP：
+ *   1. 配置了 AppID/AppSecret 时，直接请求 token。被拒（40164）时微信会把看到的 IP 写在错误里，最准确；
+ *      成功则说明已在白名单。
+ *   2. 否则（或需要显示 IP 时）查询公网 IP 服务。开了代理/VPN 时两者可能不同，以微信的为准。
+ */
+export async function probeIp(appId: string, appSecret: string): Promise<IpProbe> {
+  let whitelisted: boolean | null = null;
+  if (appId && appSecret) {
+    try {
+      await new WechatClient(appId, appSecret).getToken(true);
+      whitelisted = true;
+    } catch (e) {
+      if (e instanceof WechatApiError && e.blockedIp) {
+        return { ip: e.blockedIp, whitelisted: false, source: "wechat" };
+      }
+      if (e instanceof WechatApiError) return { ip: null, whitelisted: null, source: null, error: e.message };
+    }
+  }
+  for (const url of ["https://api.ipify.org?format=json", "https://api64.ipify.org?format=json"]) {
+    try {
+      const r = await requestUrl({ url, throw: false });
+      if (r.status === 200 && r.json?.ip) return { ip: r.json.ip, whitelisted, source: "public" };
+    } catch {
+      /* 换下一个 */
+    }
+  }
+  return { ip: null, whitelisted, source: null, error: "无法获取公网 IP，请检查网络" };
 }
 
 function explain(code: number, msg: string, api: string): string {

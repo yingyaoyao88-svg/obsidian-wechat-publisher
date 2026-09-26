@@ -9,6 +9,7 @@
  *   - [[笔记#标题|别名]]      → 别名 / 笔记名（纯文本）
  *   - ==高亮==               → <mark>高亮</mark>
  *   - - [ ] / - [x] 任务     → ☐ / ☑
+ *   - $行内公式$ / $$块公式$$   → 占位元素，渲染阶段转成图片
  *
  * 代码块（``` / ~~~）和行内代码里的内容必须原样保留，所以先按“围栏”切分，只处理正文部分。
  */
@@ -54,6 +55,11 @@ function transformProse(text: string): string {
   // 高亮
   text = text.replace(/==(?=\S)([^=\n]*?\S)==/g, "<mark>$1</mark>");
 
+  // 行内公式：$...$，开头结尾不能是空白，结尾 $ 后不能紧跟数字（避免把 “$5 和 $10” 当公式）
+  text = text.replace(/(^|[^\\$])\$(?=\S)([^$\n]*?[^\s\\])\$(?!\d)/g, (_m, lead: string, tex: string) =>
+    `${lead}<span class="wx-math" data-tex="${encodeURIComponent(tex)}"></span>`,
+  );
+
   // 任务列表
   text = text.replace(/^(\s*(?:[-*+]|\d+[.)])\s+)\[( |x|X)\]\s/gm, (_m, lead: string, mark: string) =>
     `${lead}${mark === " " ? "☐" : "☑"} `,
@@ -98,7 +104,15 @@ export function preprocessObsidian(md: string): string {
   let fence: string | null = null;
 
   const flush = () => {
-    if (buffer.length) result.push(transformOutsideInlineCode(buffer.join("\n")));
+    if (buffer.length) {
+      // 块公式 $$...$$（可跨行）；data-tex 用 URI 编码，后续的双链/高亮等替换不会误伤公式内容
+      const text = buffer
+        .join("\n")
+        .replace(/^[ \t]*\$\$([\s\S]+?)\$\$[ \t]*$/gm, (_m, tex: string) =>
+          `\n<section class="wx-math-block" data-tex="${encodeURIComponent(tex.trim())}"></section>\n`,
+        );
+      result.push(transformOutsideInlineCode(text));
+    }
     buffer = [];
   };
 

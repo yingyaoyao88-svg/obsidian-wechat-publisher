@@ -640,3 +640,44 @@ export const CODE_THEMES: Record<CodeThemeId, CodeTheme> = {
     },
   },
 };
+
+// ---------------------------------------------------------------- 排版模板
+
+export type LayoutId = "balanced" | "compact" | "relaxed" | "column";
+
+/** 排版模板只调“节奏”（行距、段距、对齐、缩进、留白），与主题正交，任何主题都能叠加 */
+export const LAYOUTS: { id: LayoutId; name: string; desc: string }[] = [
+  { id: "balanced", name: "均衡", desc: "主题默认的行距与段距" },
+  { id: "compact", name: "紧凑", desc: "行距、段距更小，适合长文和清单" },
+  { id: "relaxed", name: "舒展", desc: "更大的行距和段距，阅读更松弛" },
+  { id: "column", name: "专栏", desc: "两端对齐、首行缩进、左右留白" },
+];
+
+export function applyLayout(styles: Record<string, string>, layout: LayoutId): Record<string, string> {
+  const out = { ...styles };
+  const append = (key: string, css: string) => (out[key] = (out[key] ?? "") + css);
+  switch (layout) {
+    case "compact":
+      append("p", "line-height:1.6;margin-top:0.7em;margin-bottom:0.7em;");
+      append("li", "line-height:1.6;margin:0.15em 0;");
+      break;
+    case "relaxed":
+      append("p", "line-height:2.05;margin-top:1.6em;margin-bottom:1.6em;");
+      append("li", "line-height:2;margin:0.5em 0;");
+      break;
+    case "column":
+      append("root", "padding-left:12px;padding-right:12px;");
+      append("p", "text-align:justify;text-indent:2em;line-height:1.9;");
+      // 引用、图注、脚注等里的段落不缩进
+      append("blockquote p", "text-indent:0;");
+      append("section.wx-callout p", "text-indent:0;");
+      append("section.wx-footnotes p", "text-indent:0;");
+      break;
+  }
+  return out;
+}
+
+/** 从主题根样式里取正文颜色（公式图片需要显式颜色） */
+export function themeTextColor(theme: Theme): string {
+  return theme.styles.root.match(/(?:^|;)color:(#[0-9a-fA-F]{3,8})/)?.[1] ?? "#333333";
+}

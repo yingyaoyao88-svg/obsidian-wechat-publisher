@@ -1,15 +1,19 @@
 import { MarkdownView, Notice, Plugin, TFile } from "obsidian";
 import { renderForWechat, RenderResult } from "./render";
-import { DEFAULT_SETTINGS, WechatSettings, WechatSettingTab } from "./settings";
+import { migrateSettings, WechatAccount, WechatSettings, WechatSettingTab } from "./settings";
 import { WechatClient, WechatApiError, DraftArticle } from "./wechat/api";
-import { ImageResolver } from "./wechat/images";
-import { VIEW_TYPE_WECHAT_PREVIEW, WechatPreviewView } from "./preview";
+import { ImageResolver, LoadedImage } from "./wechat/images";
+import { VIEW_TYPE_WECHAT_PREVIEW, WechatPreviewView } from "./workbench";
+import { AccountManagerModal, IpWhitelistModal } from "./accounts";
+import { CoverOverride, MetaModal, PublishOverride, ResolvedCover } from "./meta";
+import { renderMermaidSvg, svgToPng } from "./rasterize";
+import { MP_HOME } from "./links";
 
 interface PluginData {
   settings: WechatSettings;
-  /** 图片上传缓存：同一张图不重复上传 */
+  /** 图片上传缓存：同一张图不重复上传（按账号 AppID 区分） */
   imageCache: Record<string, string>;
-  /** 笔记路径 → 草稿 media_id，用于“更新同一篇草稿” */
+  /** `账号ID|笔记路径` → 草稿 media_id，用于“更新同一篇草稿” */
   drafts: Record<string, string>;
 }
 
@@ -17,29 +21,55 @@ export interface ArticleMeta {
   title: string;
   author: string;
   digest: string;
+  /** frontmatter 里的 cover */
   cover: string;
   sourceUrl: string;
 }
 
 type RenderMode = "preview" | "upload" | "inline";
 
-const MP_HOME = "https://mp.weixin.qq.com/";
+export type StepId = "render" | "images" | "cover" | "draft" | "copy";
+export type StepState = "wait" | "run" | "done" | "error";
+
+/** 发布进度的展示方：预览面板里是步骤列表，命令行触发时是 Notice */
+export interface Reporter {
+  start(steps: { id: StepId; label: string }[]): void;
+  update(id: StepId, state: StepState, detail?: string): void;
+  finish(ok: boolean, message: string): void;
+}
+
+class NoticeReporter implements Reporter {
+  private notice = new Notice("", 0);
+  private labels = new Map<StepId, string>();
+  start(steps: { id: StepId; label: string }[]) {
+    steps.forEach((s) => this.labels.set(s.id, s.label));
+  }
+  update(id: StepId, state: StepState, detail?: string) {
+    if (state === "run") this.notice.setMessage(`${this.labels.get(id)}${detail ? `：${detail}` : "…"}`);
+  }
+  finish(ok: boolean, message: string) {
+    this.notice.setMessage(message);
+    setTimeout(() => this.notice.hide(), ok ? 6000 : 15000);
+  }
+}
+
 
 export default class WechatPublisherPlugin extends Plugin {
   settings!: WechatSettings;
   private data_!: PluginData;
-  private client!: WechatClient;
   private busy = false;
+  /** 笔记路径 → 本次发布资料覆盖（仅内存） */
+  private overrides = new Map<string, PublishOverride>();
 
   async onload() {
-    const saved = ((await this.loadData()) ?? {}) as Partial<PluginData>;
+    const saved = ((await this.loadData()) ?? {}) as Partial<PluginData> & Record<string, unknown>;
+    // 0.1.x 的 data.json 里设置在 settings 下，且为单账号结构
     this.data_ = {
-      settings: Object.assign({}, DEFAULT_SETTINGS, saved.settings),
+      settings: migrateSettings(saved.settings as unknown as Record<string, unknown>),
       imageCache: saved.imageCache ?? {},
       drafts: saved.drafts ?? {},
     };
     this.settings = this.data_.settings;
-    this.client = new WechatClient(this.settings.appId, this.settings.appSecret);
 
     this.registerView(VIEW_TYPE_WECHAT_PREVIEW, (leaf) => new WechatPreviewView(leaf, this));
     this.addRibbonIcon("send", "公众号预览 / 发布", () => this.openPreview());
@@ -55,6 +85,14 @@ export default class WechatPublisherPlugin extends Plugin {
       name: "复制公众号格式（到编辑器粘贴）",
       checkCallback: (checking) => this.withActiveFile(checking, (f) => this.copyToClipboard(f)),
     });
+    this.addCommand({
+      id: "edit-meta",
+      name: "编辑本次发布资料（标题/作者/封面）",
+      checkCallback: (checking) => this.withActiveFile(checking, (f) => this.openMetaEditor(f)),
+    });
+    this.addCommand({ id: "manage-accounts", name: "管理公众号账号", callback: () => this.openAccountManager() });
+    this.addCommand({ id: "open-mp", name: "打开公众号后台", callback: () => window.open(MP_HOME) });
+
     this.registerEvent(
       this.app.workspace.on("file-menu", (menu, file) => {
         if (!(file instanceof TFile) || file.extension !== "md") return;
@@ -66,9 +104,43 @@ export default class WechatPublisherPlugin extends Plugin {
   }
 
   async saveSettings() {
-    this.client = new WechatClient(this.settings.appId, this.settings.appSecret);
     await this.saveData(this.data_);
   }
+
+  // ------------------------------------------------------------ 账号
+
+  get activeAccount(): WechatAccount | undefined {
+    return this.settings.accounts.find((a) => a.id === this.settings.activeAccountId) ?? this.settings.accounts[0];
+  }
+
+  async setActiveAccount(id: string) {
+    this.settings.activeAccountId = id;
+    await this.saveSettings();
+    this.refreshPreviews();
+  }
+
+  private clientFor(acc: WechatAccount | undefined): WechatClient {
+    return new WechatClient(acc?.appId ?? "", acc?.appSecret ?? "");
+  }
+
+  openAccountManager(onClose?: () => void) {
+    new AccountManagerModal(this.app, this, onClose).open();
+  }
+
+  async testConnection(acc: WechatAccount) {
+    try {
+      await this.clientFor(acc).getToken(true);
+      new Notice(`✅ 「${acc.name}」连接成功，AppID / AppSecret / IP 白名单均正常`);
+    } catch (e) {
+      if (e instanceof WechatApiError && e.blockedIp) {
+        new IpWhitelistModal(this.app, e.blockedIp, acc, () => this.testConnection(acc)).open();
+      } else {
+        new Notice(`❌ ${(e as Error).message}`, 15000);
+      }
+    }
+  }
+
+  // ------------------------------------------------------------ 视图
 
   private withActiveFile(checking: boolean, fn: (f: TFile) => void): boolean {
     const file = this.app.workspace.getActiveViewOfType(MarkdownView)?.file ?? this.app.workspace.getActiveFile();
@@ -85,7 +157,7 @@ export default class WechatPublisherPlugin extends Plugin {
       await leaf.setViewState({ type: VIEW_TYPE_WECHAT_PREVIEW, active: true });
     }
     this.app.workspace.revealLeaf(leaf);
-    if (file && leaf.view instanceof WechatPreviewView) leaf.view.setFile(file);
+    if (file && file.extension === "md" && leaf.view instanceof WechatPreviewView) leaf.view.setFile(file);
   }
 
   refreshPreviews() {
@@ -94,9 +166,9 @@ export default class WechatPublisherPlugin extends Plugin {
     });
   }
 
-  // ------------------------------------------------------------ 渲染
+  // ------------------------------------------------------------ 文章资料 & 封面
 
-  private resolverFor(file: TFile): ImageResolver {
+  private resolverFor(file: TFile, acc: WechatAccount | undefined): ImageResolver {
     const cache = {
       get: (k: string) => this.data_.imageCache[k],
       set: async (k: string, v: string) => {
@@ -104,7 +176,7 @@ export default class WechatPublisherPlugin extends Plugin {
         await this.saveData(this.data_);
       },
     };
-    return new ImageResolver(this.app, file.path, this.client, cache, this.settings.appId);
+    return new ImageResolver(this.app, file.path, this.clientFor(acc), cache, acc?.appId ?? "");
   }
 
   readMeta(file: TFile): ArticleMeta {
@@ -119,7 +191,7 @@ export default class WechatPublisherPlugin extends Plugin {
     };
     return {
       title: str("title", "标题") || file.basename,
-      author: str("author", "作者") || this.settings.defaultAuthor,
+      author: str("author", "作者") || this.activeAccount?.author || "",
       digest: str("digest", "summary", "description", "摘要"),
       // 支持 cover: "[[a.png]]" / "![[a.png]]" / a.png / https://...
       cover: str("cover", "banner", "封面").replace(/^!?\[\[([^|\]]+)(\|[^\]]*)?\]\]$/, "$1"),
@@ -127,11 +199,78 @@ export default class WechatPublisherPlugin extends Plugin {
     };
   }
 
+  getOverride(file: TFile): PublishOverride {
+    return this.overrides.get(file.path) ?? {};
+  }
+
+  /** 叠加“本次发布资料”后的最终标题/作者/摘要 */
+  effectiveMeta(file: TFile): ArticleMeta {
+    const meta = this.readMeta(file);
+    const o = this.getOverride(file);
+    return {
+      ...meta,
+      title: o.title?.trim() || meta.title,
+      author: o.author?.trim() || meta.author,
+      digest: o.digest?.trim() || meta.digest,
+    };
+  }
+
+  coverPreview(file: TFile, c: CoverOverride): string | null {
+    if (c.kind === "file") return c.previewUrl;
+    const path = c.kind === "vault" ? c.path : this.activeAccount?.defaultCover;
+    return path ? this.resolverFor(file, this.activeAccount).previewUrl(path) : null;
+  }
+
+  /** 封面优先级：手动选择 > 笔记 cover 属性 > 账号默认封面 > 正文第一张图 */
+  resolveCover(file: TFile, images: string[], withOverride = true): ResolvedCover {
+    const resolver = this.resolverFor(file, this.activeAccount);
+    const preview = (src: string) => resolver.previewUrl(src);
+    const o = withOverride ? this.getOverride(file).cover : undefined;
+    const accCover = this.activeAccount?.defaultCover;
+    if (o?.kind === "file") return { source: o.image, label: "手动选择", previewUrl: o.previewUrl };
+    if (o?.kind === "vault") return { source: o.path, label: "手动选择", previewUrl: preview(o.path) };
+    if (o?.kind === "account" && accCover) return { source: accCover, label: "账号默认", previewUrl: preview(accCover) };
+    const fmCover = this.readMeta(file).cover;
+    if (fmCover) return { source: fmCover, label: "笔记属性", previewUrl: preview(fmCover) };
+    if (accCover) return { source: accCover, label: "账号默认", previewUrl: preview(accCover) };
+    if (images[0]) return { source: images[0], label: "正文首图", previewUrl: preview(images[0]) };
+    return { source: null, label: "未设置", previewUrl: null };
+  }
+
+  async openMetaEditor(file: TFile) {
+    const { result } = await this.renderFile(file, "preview");
+    const meta = this.readMeta(file);
+    const accCover = this.activeAccount?.defaultCover;
+    new MetaModal(
+      this.app,
+      this.getOverride(file),
+      {
+        title: meta.title,
+        author: meta.author,
+        digest: meta.digest,
+        cover: this.resolveCover(file, result.images),
+        autoCover: this.resolveCover(file, result.images, false),
+        accountCover: accCover
+          ? { source: accCover, label: "账号默认", previewUrl: this.coverPreview(file, { kind: "account" }) }
+          : null,
+      },
+      (c) => this.coverPreview(file, c),
+      (o) => {
+        const empty = !o.title && !o.author && !o.digest && !o.cover;
+        if (empty) this.overrides.delete(file.path);
+        else this.overrides.set(file.path, o);
+        this.refreshPreviews();
+      },
+    ).open();
+  }
+
+  // ------------------------------------------------------------ 渲染
+
   /**
    * mode:
    *   preview —— 图片用本地资源地址（不联网）
-   *   upload  —— 图片上传到微信图床（推送草稿、或已配置 API 时的复制）
-   *   inline  —— 图片内嵌 base64（未配置 API 时的复制兜底）
+   *   upload  —— 图片上传到微信图床（推送草稿、或已配置账号时的复制）
+   *   inline  —— 图片内嵌 base64（未配置账号时的复制兜底）
    */
   async renderFile(
     file: TFile,
@@ -139,7 +278,7 @@ export default class WechatPublisherPlugin extends Plugin {
     onImage?: (done: number) => void,
   ): Promise<{ result: RenderResult; meta: ArticleMeta; resolver: ImageResolver }> {
     const source = await this.app.vault.cachedRead(file);
-    const resolver = this.resolverFor(file);
+    const resolver = this.resolverFor(file, this.activeAccount);
     let done = 0;
     const resolveImage = async (src: string) => {
       const url =
@@ -156,114 +295,159 @@ export default class WechatPublisherPlugin extends Plugin {
       themeId: s.themeId,
       themeColor: s.themeColor,
       fontSize: s.fontSize,
+      layout: s.layout,
       codeTheme: s.codeTheme,
       macCodeBlock: s.macCodeBlock,
       linkToFootnote: s.linkToFootnote,
       imageCaption: s.imageCaption,
       resolveImage,
+      rasterize: svgToPng,
+      renderMermaid: renderMermaidSvg,
     });
-    return { result, meta: this.readMeta(file), resolver };
+    return { result, meta: this.effectiveMeta(file), resolver };
   }
 
   // ------------------------------------------------------------ 动作
 
-  async testConnection() {
-    try {
-      await this.client.getToken(true);
-      new Notice("✅ 连接成功，AppID / AppSecret / IP 白名单均正常");
-    } catch (e) {
-      new Notice(`❌ ${(e as Error).message}`, 15000);
-    }
-  }
-
-  private async guard(label: string, fn: (notice: Notice) => Promise<void>) {
+  private async run(reporter: Reporter, fn: () => Promise<string>, onError?: (e: unknown) => boolean) {
     if (this.busy) {
       new Notice("上一个任务还在进行中…");
       return;
     }
     this.busy = true;
-    const notice = new Notice(`${label}…`, 0);
     try {
-      await fn(notice);
+      reporter.finish(true, await fn());
     } catch (e) {
-      console.error("[wechat-publisher]", e);
-      notice.hide();
-      new Notice(`❌ ${label}失败：${(e as Error).message}`, 20000);
-      return;
+      console.error("[wechat-mp-publisher]", e);
+      const handled = onError?.(e) ?? false;
+      reporter.finish(false, handled ? "已暂停：请按弹窗提示处理后重试" : `❌ ${(e as Error).message}`);
     } finally {
       this.busy = false;
     }
-    setTimeout(() => notice.hide(), 6000);
   }
 
-  async publishDraft(file: TFile) {
-    await this.guard("推送到公众号草稿箱", async (notice) => {
-      if (!this.client.configured) throw new Error("请先在插件设置中填写 AppID 和 AppSecret");
+  async publishDraft(file: TFile, reporter: Reporter = new NoticeReporter()) {
+    const acc = this.activeAccount;
+    reporter.start([
+      { id: "render", label: "排版" },
+      { id: "images", label: "上传正文图片" },
+      { id: "cover", label: "封面" },
+      { id: "draft", label: "写入草稿箱" },
+    ]);
+    let current: StepId = "render";
+    const step = (id: StepId, detail?: string) => {
+      if (current !== id) reporter.update(current, "done");
+      current = id;
+      reporter.update(id, "run", detail);
+    };
 
-      const { result, meta, resolver } = await this.renderFile(file, "upload", (n) =>
-        notice.setMessage(`正在上传正文图片 ${n}…`),
-      );
-      if (result.warnings.length) throw new Error(result.warnings.join("\n"));
-
-      notice.setMessage("正在上传封面…");
-      const coverSrc = meta.cover || result.images[0] || this.settings.defaultCover;
-      if (!coverSrc) {
-        throw new Error("公众号草稿必须有封面：请在 frontmatter 写 cover: 图片路径，或在正文放一张图，或在设置里指定默认封面");
-      }
-      const thumbId = await resolver.uploadCover(coverSrc);
-
-      const article: DraftArticle = {
-        title: meta.title.slice(0, 64),
-        author: meta.author.slice(0, 16) || undefined,
-        digest: meta.digest.slice(0, 120) || undefined,
-        content: result.html,
-        content_source_url: meta.sourceUrl || undefined,
-        thumb_media_id: thumbId,
-        need_open_comment: this.settings.openComment ? 1 : 0,
-        only_fans_can_comment: 0,
-      };
-
-      notice.setMessage("正在写入草稿箱…");
-      const existing = this.settings.updateExistingDraft ? this.data_.drafts[file.path] : undefined;
-      let updated = false;
-      if (existing) {
-        try {
-          await this.client.updateDraft(existing, article);
-          updated = true;
-        } catch (e) {
-          // 草稿已在后台被删除/发表 → 新建
-          if (!(e instanceof WechatApiError)) throw e;
+    await this.run(
+      reporter,
+      async () => {
+        if (!acc || !acc.appId || !acc.appSecret) {
+          throw new Error("还没有配置公众号账号：点击顶部「发布到」或设置里的「管理账号」添加 AppID 和 AppSecret");
         }
-      }
-      if (!updated) {
-        this.data_.drafts[file.path] = await this.client.addDraft(article);
-        await this.saveData(this.data_);
-      }
+        step("render");
+        let total = 0;
+        const { result, meta, resolver } = await this.renderFile(file, "upload", (n) => {
+          if (n === 1) step("images");
+          total = n;
+          reporter.update("images", "run", `${n} 张`);
+        });
+        if (result.warnings.length) throw new Error(result.warnings.join("\n"));
+        if (current === "render") reporter.update("images", "done", "无图片");
+        else reporter.update("images", "done", `${total} 张`);
 
-      notice.setMessage(`✅ 已${updated ? "更新" : "新建"}草稿「${article.title}」，请到公众号后台「内容与互动 → 草稿箱」查看`);
-      if (this.settings.openBrowserAfterPublish) window.open(MP_HOME);
-    });
+        step("cover");
+        const cover = this.resolveCover(file, result.images);
+        if (!cover.source) {
+          throw new Error("公众号草稿必须有封面：点顶部的稿件资料选择封面，或在笔记写 cover 属性，或给账号设置默认封面");
+        }
+        const { mediaId, reused } = await resolver.uploadCover(cover.source as string | LoadedImage);
+        reporter.update("cover", "done", `${cover.label} · ${reused ? "复用历史封面" : "已上传新封面"}`);
+
+        step("draft");
+        const article: DraftArticle = {
+          title: meta.title.slice(0, 64),
+          author: meta.author.slice(0, 16) || undefined,
+          digest: meta.digest.slice(0, 120) || undefined,
+          content: result.html,
+          content_source_url: meta.sourceUrl || undefined,
+          thumb_media_id: mediaId,
+          need_open_comment: this.settings.openComment ? 1 : 0,
+          only_fans_can_comment: 0,
+        };
+        const client = this.clientFor(acc);
+        const key = `${acc.id}|${file.path}`;
+        const existing = this.settings.updateExistingDraft ? this.data_.drafts[key] : undefined;
+        let updated = false;
+        if (existing) {
+          try {
+            await client.updateDraft(existing, article);
+            updated = true;
+          } catch (e) {
+            // 草稿已在后台被删除/发表 → 新建；其它错误照常抛出
+            if (!(e instanceof WechatApiError) || e.blockedIp) throw e;
+          }
+        }
+        if (!updated) {
+          this.data_.drafts[key] = await client.addDraft(article);
+          await this.saveData(this.data_);
+        }
+        reporter.update("draft", "done", updated ? "已更新原草稿" : "已新建草稿");
+        if (this.settings.openBrowserAfterPublish) window.open(MP_HOME);
+        return `✅ 已${updated ? "更新" : "新建"}草稿「${article.title}」→ 公众号后台「内容与互动 → 草稿箱」`;
+      },
+      (e) => {
+        reporter.update(current, "error");
+        if (e instanceof WechatApiError && e.blockedIp) {
+          new IpWhitelistModal(this.app, e.blockedIp, acc, () => this.publishDraft(file, reporter)).open();
+          return true;
+        }
+        return false;
+      },
+    );
   }
 
-  async copyToClipboard(file: TFile) {
-    await this.guard("复制公众号格式", async (notice) => {
-      const mode: RenderMode = this.client.configured ? "upload" : "inline";
-      const { result } = await this.renderFile(file, mode, (n) => notice.setMessage(`正在处理图片 ${n}…`));
-      const html = result.html;
-      const plain = new DOMParser().parseFromString(html, "text/html").body.innerText;
-      await navigator.clipboard.write([
-        new ClipboardItem({
-          "text/html": new Blob([html], { type: "text/html" }),
-          "text/plain": new Blob([plain], { type: "text/plain" }),
-        }),
-      ]);
-      const tip =
-        mode === "inline" && result.images.length
-          ? "（未配置公众号 API，图片以内嵌方式复制，个别图片可能需要在编辑器里重新上传）"
-          : "";
-      notice.setMessage(`✅ 已复制，打开公众号编辑器直接粘贴即可${tip}`);
-      if (result.warnings.length) new Notice(result.warnings.join("\n"), 15000);
-      if (this.settings.openBrowserAfterPublish) window.open(MP_HOME);
-    });
+  async copyToClipboard(file: TFile, reporter: Reporter = new NoticeReporter()) {
+    const acc = this.activeAccount;
+    const configured = !!(acc?.appId && acc?.appSecret);
+    reporter.start([
+      { id: "render", label: configured ? "排版并上传图片" : "排版" },
+      { id: "copy", label: "复制到剪贴板" },
+    ]);
+    await this.run(
+      reporter,
+      async () => {
+        reporter.update("render", "run");
+        const mode: RenderMode = configured ? "upload" : "inline";
+        const { result } = await this.renderFile(file, mode, (n) => reporter.update("render", "run", `图片 ${n}`));
+        reporter.update("render", "done");
+        reporter.update("copy", "run");
+        const html = result.html;
+        const plain = new DOMParser().parseFromString(html, "text/html").body.innerText;
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            "text/html": new Blob([html], { type: "text/html" }),
+            "text/plain": new Blob([plain], { type: "text/plain" }),
+          }),
+        ]);
+        reporter.update("copy", "done");
+        if (result.warnings.length) new Notice(result.warnings.join("\n"), 15000);
+        const tip =
+          mode === "inline" && result.images.length
+            ? "（未配置账号：图片为内嵌方式，个别图片可能需要在编辑器里重新上传）"
+            : "";
+        return `✅ 已复制，到公众号编辑器正文里粘贴即可${tip}`;
+      },
+      (e) => {
+        reporter.update("render", "error");
+        if (e instanceof WechatApiError && e.blockedIp) {
+          new IpWhitelistModal(this.app, e.blockedIp, acc, () => this.copyToClipboard(file, reporter)).open();
+          return true;
+        }
+        return false;
+      },
+    );
   }
 }

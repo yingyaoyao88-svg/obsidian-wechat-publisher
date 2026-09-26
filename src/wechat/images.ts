@@ -83,6 +83,18 @@ async function reencodeJpeg(data: ArrayBuffer, mime: string, maxBytes: number): 
   }
 }
 
+/** 内容哈希：公式图、电脑上选的封面等没有文件路径的图片，用它去重，避免重复上传 */
+export async function sha256Hex(data: ArrayBuffer): Promise<string> {
+  const d = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(d), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** 从电脑选择的文件 → LoadedImage */
+export async function loadBrowserFile(file: File): Promise<LoadedImage> {
+  const data = await file.arrayBuffer();
+  return { data, mime: sniffMime(data, file.name), filename: file.name, cacheKey: `sha:${await sha256Hex(data)}` };
+}
+
 function arrayBufferToBase64(buf: ArrayBuffer): string {
   let s = "";
   const bytes = new Uint8Array(buf);
@@ -134,8 +146,8 @@ export class ImageResolver {
       if (!m) throw new Error("无法解析 data URI");
       const bin = m[2] ? atob(m[3]) : decodeURIComponent(m[3]);
       const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
-      const mime = sniffMime(bytes.buffer, "");
-      return { data: bytes.buffer, mime, filename: `image.${extOf(mime)}`, cacheKey: null };
+      const mime = sniffMime(bytes.buffer, /svg/i.test(m[1] ?? "") ? "x.svg" : "");
+      return { data: bytes.buffer, mime, filename: `image.${extOf(mime)}`, cacheKey: `sha:${await sha256Hex(bytes.buffer)}` };
     }
     if (/^https?:/i.test(src)) {
       const res = await requestUrl({ url: src, method: "GET", throw: false });
@@ -189,15 +201,15 @@ export class ImageResolver {
     return url;
   }
 
-  /** 封面 → 永久素材 media_id */
-  async uploadCover(src: string): Promise<string> {
-    const img = await this.load(src);
+  /** 封面 → 永久素材 media_id（src 为地址，或已读入内存的图片，如“从电脑选择”） */
+  async uploadCover(src: string | LoadedImage): Promise<{ mediaId: string; reused: boolean }> {
+    const img = typeof src === "string" ? await this.load(src) : src;
     const hit = this.cached("cover", img);
-    if (hit) return hit;
+    if (hit) return { mediaId: hit, reused: true };
     const n = await this.normalize(img, true, 10 * MB - 64 * 1024);
     const r = await this.client.addImageMaterial(n.data, `${n.filename.replace(/\.\w+$/, "")}.${extOf(n.mime)}`, n.mime);
     await this.remember("cover", img, r.media_id);
-    return r.media_id;
+    return { mediaId: r.media_id, reused: false };
   }
 
   /** 未配置 API 时的复制模式：内嵌为 base64（公众号编辑器粘贴时会尝试自动转存） */

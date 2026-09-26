@@ -1,15 +1,19 @@
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js/lib/common";
 import { preprocessObsidian } from "./preprocess";
-import { buildTheme, CODE_THEMES, CodeThemeId, MONO, ThemeDecor } from "./theme";
+import { applyLayout, buildTheme, CODE_THEMES, CodeThemeId, LayoutId, MONO, ThemeDecor, themeTextColor } from "./theme";
+import { texToSvg } from "./math";
 
-export { THEMES, CODE_THEMES } from "./theme";
+export { THEMES, CODE_THEMES, LAYOUTS } from "./theme";
+export type { LayoutId } from "./theme";
 export { stripFrontmatter } from "./preprocess";
 
 export interface RenderOptions {
   themeId: string;
   themeColor: string;
   fontSize: number;
+  /** 排版模板：均衡 / 紧凑 / 舒展 / 专栏 */
+  layout?: LayoutId;
   codeTheme: CodeThemeId;
   /** 代码块顶部显示 macOS 风格的红黄绿三个圆点 */
   macCodeBlock: boolean;
@@ -22,6 +26,13 @@ export interface RenderOptions {
    * 预览时是 Obsidian 本地资源地址，发布时是上传到微信后的 mmbiz.qpic.cn 地址。
    */
   resolveImage: (src: string) => Promise<string>;
+  /**
+   * 把 SVG（公式、Mermaid 图）变成 <img> 可用的地址。
+   * 插件里用 canvas 栅格化成 PNG（公众号不收 SVG）；缺省时直接用 SVG data URI（仅用于测试/预览）。
+   */
+  rasterize?: (svg: string, kind: "math" | "diagram") => Promise<string>;
+  /** Mermaid 源码 → SVG。缺省时 Mermaid 按普通代码块显示 */
+  renderMermaid?: (code: string) => Promise<string>;
   /** 默认用全局 DOMParser；在 Node 测试里注入 jsdom */
   parseHTML?: (html: string) => Document;
 }
@@ -51,6 +62,9 @@ function createMarkdown(): InstanceType<typeof MarkdownIt> {
     typographer: false,
     highlight(code: string, lang: string): string {
       const language = (lang || "").trim().split(/\s+/)[0].toLowerCase();
+      if (language === "mermaid") {
+        return `<pre class="wx-mermaid" data-code="${encodeURIComponent(code)}"></pre>`;
+      }
       let body: string;
       if (language && hljs.getLanguage(language)) {
         body = hljs.highlight(code, { language, ignoreIllegals: true }).value;
@@ -151,6 +165,100 @@ function transformCodeBlocks(root: Element, doc: Document, opts: RenderOptions) 
   });
 }
 
+// ---------------------------------------------------------------- 公式 / Mermaid
+
+function svgDataUri(svg: string): string {
+  return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+}
+
+async function transformMath(root: Element, doc: Document, opts: RenderOptions, color: string, warnings: string[]) {
+  const rasterize = opts.rasterize ?? (async (svg: string) => svgDataUri(svg));
+  const exPx = opts.fontSize / 2; // MathJax 约定 1ex ≈ 0.5em
+  const nodes = Array.from(root.querySelectorAll("span.wx-math, section.wx-math-block"));
+  for (const node of nodes) {
+    const display = node.tagName === "SECTION";
+    const tex = decodeURIComponent(node.getAttribute("data-tex") ?? "");
+    try {
+      const m = texToSvg(tex, display, color);
+      const img = doc.createElement("img");
+      img.className = "wx-math-img";
+      img.setAttribute("src", await rasterize(m.svg, "math"));
+      img.setAttribute("alt", "");
+      const w = (m.widthEx * exPx).toFixed(1);
+      const h = (m.heightEx * exPx).toFixed(1);
+      // 显式重置：主题里给普通图片加的边框/阴影/圆角不应作用在公式上
+      const reset = "border:none;box-shadow:none;border-radius:0;padding:0;background:transparent;";
+      if (display) {
+        img.setAttribute("style", `${reset}display:block;margin:0 auto;width:${w}px;max-width:100%;height:auto;`);
+        const wrap = doc.createElement("section");
+        wrap.className = "wx-math-display";
+        wrap.setAttribute("style", "margin:1em 0;text-align:center;overflow-x:auto;");
+        wrap.appendChild(img);
+        node.parentNode!.replaceChild(wrap, node);
+      } else {
+        const va = (m.verticalAlignEx * exPx).toFixed(1);
+        img.setAttribute(
+          "style",
+          `${reset}display:inline-block;margin:0 1px;width:${w}px;height:${h}px;max-width:none;vertical-align:${va}px;`,
+        );
+        node.parentNode!.replaceChild(img, node);
+      }
+    } catch (e) {
+      warnings.push((e as Error).message);
+      const code = doc.createElement("code");
+      code.textContent = display ? `$$${tex}$$` : `$${tex}$`;
+      node.parentNode!.replaceChild(code, node);
+    }
+  }
+}
+
+/** Mermaid SVG 的逻辑宽度：优先 style 里的 max-width，其次 viewBox */
+function diagramWidth(svg: string): number | null {
+  const head = svg.match(/<svg[^>]*>/)?.[0] ?? "";
+  const mw = head.match(/max-width:\s*([\d.]+)px/);
+  if (mw) return parseFloat(mw[1]);
+  const w = head.match(/\swidth="([\d.]+)(px)?"/);
+  if (w) return parseFloat(w[1]);
+  const vb = head.match(/viewBox="[-\d.]+[\s,]+[-\d.]+[\s,]+([\d.]+)/);
+  return vb ? parseFloat(vb[1]) : null;
+}
+
+async function transformMermaid(root: Element, doc: Document, opts: RenderOptions, warnings: string[]) {
+  const blocks = Array.from(root.querySelectorAll("pre.wx-mermaid"));
+  for (const pre of blocks) {
+    const code = decodeURIComponent(pre.getAttribute("data-code") ?? "");
+    let replacement: Element | null = null;
+    if (opts.renderMermaid) {
+      try {
+        const svg = await opts.renderMermaid(code);
+        const src = await (opts.rasterize ?? (async (s: string) => svgDataUri(s)))(svg, "diagram");
+        replacement = doc.createElement("section");
+        replacement.className = "wx-img";
+        const img = doc.createElement("img");
+        img.className = "wx-diagram";
+        img.setAttribute("src", src);
+        img.setAttribute("alt", "");
+        // PNG 按 3 倍分辨率栅格化，显示宽度要用图表本身的逻辑宽度，否则小图会被放大到整屏宽
+        const w = diagramWidth(svg);
+        if (w) img.setAttribute("style", `width:${Math.round(w)}px;max-width:100%;`);
+        replacement.appendChild(img);
+      } catch (e) {
+        warnings.push(`Mermaid 渲染失败：${(e as Error).message}`);
+      }
+    }
+    if (!replacement) {
+      // 退化为普通代码块，交给后面的代码块处理
+      replacement = doc.createElement("pre");
+      replacement.className = "wx-pre";
+      const c = doc.createElement("code");
+      c.className = "wx-code";
+      c.textContent = code.replace(/\n$/, "");
+      replacement.appendChild(c);
+    }
+    pre.parentNode!.replaceChild(replacement, pre);
+  }
+}
+
 // ---------------------------------------------------------------- 图片
 
 async function transformImages(root: Element, doc: Document, opts: RenderOptions, warnings: string[]) {
@@ -170,6 +278,7 @@ async function transformImages(root: Element, doc: Document, opts: RenderOptions
   for (const img of imgs) {
     const raw = img.getAttribute("src") ?? "";
     img.setAttribute("src", resolved.get(raw) ?? raw);
+    if (img.classList.contains("wx-math-img") || img.classList.contains("wx-diagram")) continue;
 
     // Obsidian 标准语法 ![描述|300](a.png) 的宽度写在 alt 里
     let alt = img.getAttribute("alt") ?? "";
@@ -189,7 +298,8 @@ async function transformImages(root: Element, doc: Document, opts: RenderOptions
     const meaningful = Array.from(p.childNodes).filter(
       (n) => !(n.nodeType === 3 && !(n.nodeValue ?? "").trim()) && n.nodeName !== "BR",
     );
-    if (!meaningful.length || !meaningful.every((n) => n.nodeName === "IMG")) return;
+    const isPicture = (n: ChildNode) => n.nodeName === "IMG" && !(n as Element).classList.contains("wx-math-img");
+    if (!meaningful.length || !meaningful.every(isPicture)) return;
     const frag = doc.createDocumentFragment();
     meaningful.forEach((img) => {
       const block = doc.createElement("section");
@@ -207,6 +317,7 @@ async function transformImages(root: Element, doc: Document, opts: RenderOptions
     p.parentNode!.replaceChild(frag, p);
   });
   root.querySelectorAll("img").forEach((img) => {
+    if (img.classList.contains("wx-math-img")) return;
     if (!img.parentElement?.classList.contains("wx-img")) img.classList.add("wx-inline-img");
   });
 }
@@ -218,6 +329,13 @@ function transformLinks(root: Element, doc: Document, opts: RenderOptions) {
   root.querySelectorAll("a").forEach((a) => {
     const href = a.getAttribute("href") ?? "";
     const text = a.textContent ?? "";
+    // 公众号后台链接（cgi-bin）会让草稿接口判定 invalid content：只保留文字
+    if (/^https?:\/\/mp\.weixin\.qq\.com\/cgi-bin\//.test(href)) {
+      const span = doc.createElement("span");
+      while (a.firstChild) span.appendChild(a.firstChild);
+      a.parentNode!.replaceChild(span, a);
+      return;
+    }
     if (/^https?:\/\/mp\.weixin\.qq\.com\//.test(href)) {
       a.classList.add("wx-inner-link"); // 公众号文章链接可以直接点
       return;
@@ -414,15 +532,18 @@ export async function renderForWechat(source: string, opts: RenderOptions): Prom
     if (src && !images.includes(src)) images.push(src);
   });
 
+  const theme = buildTheme(opts.themeId, { color: opts.themeColor, fontSize: opts.fontSize });
+
   transformCallouts(root, doc);
+  await transformMath(root, doc, opts, themeTextColor(theme), warnings);
+  await transformMermaid(root, doc, opts, warnings);
   transformCodeBlocks(root, doc, opts);
   await transformImages(root, doc, opts, warnings);
   transformLinks(root, doc, opts);
   transformMisc(root, doc);
 
-  const theme = buildTheme(opts.themeId, { color: opts.themeColor, fontSize: opts.fontSize });
   applyDecor(root, doc, theme.decor);
-  applyTheme(root, theme.styles);
+  applyTheme(root, applyLayout(theme.styles, opts.layout ?? "balanced"));
   cleanAttributes(root);
 
   return { html: root.outerHTML, images, warnings };
