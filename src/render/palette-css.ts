@@ -64,7 +64,7 @@ export function buildPaletteCss(theme: PaletteTheme, p: StyleProfile): string {
 
   const quoteSel = ".wxp-root blockquote";
   const quote = {
-    "card-soft": `margin:${p.paragraphMargin};padding:${p.blockquotePadding};border-top:1px solid ${c.border};border-bottom:1px solid ${c.border};border-radius:10px;background:${c.primarySoft};`,
+    "card-soft": `margin:${p.paragraphMargin};padding:${p.blockquotePadding};border-top:1px solid ${c.border};border-bottom:1px solid ${c.border};border-radius:10px;background:#EEF4FA;`,
     "card-square": `margin:${p.paragraphMargin};padding:${p.blockquotePadding};border:1px solid ${c.border};border-left:4px solid ${c.primary};border-radius:0;background:${c.quoteBackground};`,
     "bar-rounded": `margin:${p.paragraphMargin};padding:${p.blockquotePadding};border-left:4px solid ${c.primary};border-radius:${r};background:transparent;`,
     "bar-square": `margin:${p.paragraphMargin};padding:${p.blockquotePadding};border-left:4px solid ${c.primary};border-radius:0;background:transparent;`,
@@ -72,7 +72,7 @@ export function buildPaletteCss(theme: PaletteTheme, p: StyleProfile): string {
   }[p.calloutStyleMode];
 
   return `
-.wxp-root{font-family:${paletteFont(theme, p)};font-size:${p.fontSize}px;line-height:${p.lineHeight};color:${c.text};letter-spacing:${p.letterSpacing};background:${c.background};word-break:break-word;text-align:${p.textAlign};padding:12px ${p.contentSideIndent} 16px;}
+.wxp-root{font-family:${paletteFont(theme, p)};font-size:${p.fontSize}px;line-height:${p.lineHeight};color:${c.text};letter-spacing:${p.letterSpacing};background:${c.background};word-break:break-word;text-align:${p.textAlign};padding-left:${p.contentSideIndent};padding-right:${p.contentSideIndent};}
 .wxp-root h1,.wxp-root h2,.wxp-root h3,.wxp-root h4,.wxp-root h5,.wxp-root h6{color:${c.text};font-weight:${theme.headingWeight};line-height:1.35;}
 ${h1}
 ${h2}
@@ -94,7 +94,7 @@ ${h4}
 ${quoteSel}{${quote}}
 ${quoteSel}{font-size:${p.fontSize}px;line-height:${p.lineHeight};color:${c.text};}
 .wxp-root blockquote p,.wxp-root blockquote strong,.wxp-root blockquote em,.wxp-root blockquote a{font-size:inherit;line-height:inherit;color:inherit;}
-.wxp-root blockquote p{text-indent:0;margin:0.4em 0;}
+.wxp-root blockquote p{text-indent:0;}
 .wxp-root blockquote > :first-child{margin-top:0;}
 .wxp-root blockquote > :last-child{margin-bottom:0;}
 .wxp-root .wx-callout-title{font-weight:bold;color:${c.primary};margin-bottom:0.3em;}
@@ -104,11 +104,11 @@ ${quoteSel}{font-size:${p.fontSize}px;line-height:${p.lineHeight};color:${c.text
 .wxp-root section.wx-img{margin:${p.paragraphMargin};text-align:center;}
 .wxp-root .wx-caption{display:block;margin:-0.2em 8px 1em;color:${c.secondary};font-size:0.88em;text-align:center;text-indent:0;}
 .wxp-root hr{margin:2em 0;border:0;border-top:2px solid ${c.border};height:0;}
-.wxp-root table{width:100%;border-collapse:collapse;background:${c.background};font-size:0.94em;}
+.wxp-root table{width:100%;border-collapse:collapse;background:${c.background};}
 .wxp-root th,.wxp-root td{padding:0.55em 0.7em;border:1px solid ${c.border};text-align:left;color:${c.text};}
 .wxp-root th{background:${c.primarySoft};font-weight:bold;}
 .wxp-root section.wx-codeblock{margin:${p.paragraphMargin};overflow:hidden;border-radius:${r};text-align:left;text-indent:0;}
-.wxp-root code.wx-inline{padding:3px 6px;border-radius:6px;background:${c.primarySoft};color:${c.primary};font-size:0.92em;font-family:Menlo,Monaco,Consolas,'Courier New',monospace;}
+.wxp-root code.wx-inline{padding:3px 6px;border-radius:6px;background:${c.primarySoft};color:${c.primary};font-size:0.92em;}
 .wxp-root section.wx-footnotes{margin:2.5em 8px 0;font-size:0.82em;color:${c.secondary};}
 .wxp-root section.wx-footnotes p{margin:0.3em 0;color:${c.secondary};text-indent:0;word-break:break-all;line-height:1.6;}
 .wxp-root section.wx-footnotes-title{font-weight:bold;color:${c.text};margin-bottom:0.6em;}

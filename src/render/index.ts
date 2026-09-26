@@ -140,11 +140,13 @@ function macDots(): string {
 
 function transformCodeBlocks(root: Element, doc: Document, theme: Theme) {
   const ct = theme.code;
+  // 调色板主题的代码块与参考排版一致：代码字号为正文的 0.92 倍、行距 1.42、内边距在 code 上、注释不斜体
+  const palette = theme.kind === "palette";
   root.querySelectorAll("pre.wx-pre").forEach((pre) => {
     const code = pre.querySelector("code")!;
     code.querySelectorAll("span").forEach((span) => {
       const color = hljsColor(span, ct.palette);
-      const italic = span.classList.contains("hljs-comment") || span.classList.contains("hljs-quote");
+      const italic = !palette && (span.classList.contains("hljs-comment") || span.classList.contains("hljs-quote"));
       const style = `${color ? `color:${color};` : ""}${italic ? "font-style:italic;" : ""}`;
       if (style) span.setAttribute("style", style);
       span.removeAttribute("class");
@@ -156,19 +158,33 @@ function transformCodeBlocks(root: Element, doc: Document, theme: Theme) {
     wrapper.setAttribute("style", `background:${ct.background};`);
     if (theme.showMacCodeHeader) {
       const header = doc.createElement("section");
-      header.setAttribute("style", `padding:8px 12px;background:${ct.headerBackground};line-height:1;`);
+      header.setAttribute(
+        "style",
+        palette
+          ? `display:flex;align-items:center;padding:7px 12px;background:${ct.headerBackground};line-height:1;`
+          : `padding:8px 12px;background:${ct.headerBackground};line-height:1;`,
+      );
       header.innerHTML = macDots();
       wrapper.appendChild(header);
     }
-    pre.setAttribute(
-      "style",
-      `margin:0;padding:12px 16px 14px;background:${ct.background};overflow-x:auto;border-radius:0;text-indent:0;`,
-    );
-    code.setAttribute(
-      "style",
-      `display:block;white-space:nowrap;font-family:${MONO};font-size:${theme.kind === "palette" ? 14 : 13}px;line-height:1.65;text-indent:0;` +
-        `color:${ct.color};background:transparent;letter-spacing:0;padding:0;margin:0;word-break:normal;`,
-    );
+    if (palette) {
+      pre.setAttribute("style", `margin:0;padding:0;background:${ct.background};overflow-x:auto;border-radius:0;text-indent:0;`);
+      code.setAttribute(
+        "style",
+        `display:block;white-space:nowrap;font-family:${MONO};font-size:0.92em;line-height:1.42;text-indent:0;` +
+          `color:${ct.color};background:${ct.background};padding:0.8em 1em 1em;margin:0;border-radius:0;word-break:normal;`,
+      );
+    } else {
+      pre.setAttribute(
+        "style",
+        `margin:0;padding:12px 16px 14px;background:${ct.background};overflow-x:auto;border-radius:0;text-indent:0;`,
+      );
+      code.setAttribute(
+        "style",
+        `display:block;white-space:nowrap;font-family:${MONO};font-size:13px;line-height:1.65;text-indent:0;` +
+          `color:${ct.color};background:transparent;letter-spacing:0;padding:0;margin:0;word-break:normal;`,
+      );
+    }
     pre.parentNode!.replaceChild(wrapper, pre);
     wrapper.appendChild(pre);
   });
@@ -408,7 +424,7 @@ function transformCallouts(root: Element, doc: Document, mode: Theme["callout"])
   root.querySelectorAll("blockquote").forEach((bq) => {
     const first = bq.firstElementChild;
     if (!first || first.tagName !== "P") return;
-    const m = first.innerHTML.match(/^\[!(\w+)\][+-]?[ \t]*([^\n]*)(\n|$)/);
+    const m = first.innerHTML.match(/^\[!(\w+)\][+-]?[ \t]*([^\n<]*)(?:<br\s*\/?>)?(\n|$)/);
     if (!m) return;
     const type = m[1].toLowerCase();
     const [color, icon] = CALLOUT_COLORS[type] ?? CALLOUT_COLORS.note;
@@ -424,13 +440,24 @@ function transformCallouts(root: Element, doc: Document, mode: Theme["callout"])
       title.setAttribute("style", `color:${color};`);
       title.innerHTML = `${icon} ${label}`;
     } else {
-      // 调色板主题：与引用块同款，标题用主色
+      // 调色板主题：与参考排版一致，callout 就是普通引用，标题作为引用的第一行
       title.innerHTML = label;
     }
-    section.appendChild(title);
 
     first.innerHTML = first.innerHTML.slice(m[0].length);
     if (!first.innerHTML.trim()) first.remove();
+    if (mode === "quote") {
+      // 标题并入第一段的首行：“小提示<br>正文…”，由软换行处理成块级续行
+      const p = bq.firstElementChild?.tagName === "P" ? bq.firstElementChild : null;
+      if (p) p.innerHTML = `${label}<br>${p.innerHTML.replace(/^\n/, "")}`;
+      else {
+        const np = doc.createElement("p");
+        np.innerHTML = label;
+        bq.insertBefore(np, bq.firstChild);
+      }
+    } else {
+      section.appendChild(title);
+    }
     while (bq.firstChild) section.appendChild(bq.firstChild);
     bq.parentNode!.replaceChild(section, bq);
   });
