@@ -221,10 +221,7 @@ export default class WechatPublisherPlugin extends Plugin {
     };
   }
 
-  /**
-   * 笔记开头的一级标题（frontmatter 之后的第一个块）。公众号的文章标题是单独显示的，
-   * 所以这行会作为标题使用，并从正文里去掉，避免标题出现两次。
-   */
+  /** 笔记开头的一级标题（frontmatter 之后的第一个块），没有 title 属性时用作文章标题 */
   leadingH1(file: TFile): { text: string; line: number } | null {
     const cache = this.app.metadataCache.getFileCache(file);
     const first = cache?.sections?.find((sec) => sec.type !== "yaml");
@@ -345,14 +342,8 @@ export default class WechatPublisherPlugin extends Plugin {
     mode: RenderMode,
     onImage?: (done: number) => void,
   ): Promise<{ result: RenderResult; meta: ArticleMeta; resolver: ImageResolver }> {
-    let source = await this.app.vault.cachedRead(file);
-    const h1 = this.leadingH1(file);
-    const fmTitle = this.readMeta(file).title;
-    if (h1 && fmTitle === h1.text) {
-      const lines = source.split("\n");
-      lines.splice(h1.line, 1);
-      source = lines.join("\n");
-    }
+    // 开头的 # 标题保留在正文里，按主题的一级标题样式显示（与参考排版一致）；同时它也用作文章标题
+    const source = await this.app.vault.cachedRead(file);
     const resolver = this.resolverFor(file, this.activeAccount);
     let done = 0;
     const resolveImage = async (src: string) => {

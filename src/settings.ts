@@ -162,7 +162,7 @@ export class WechatSettingTab extends PluginSettingTab {
       text: "主题、排版模板、主题色、字号也可以在预览面板的「格式」里一键切换，效果实时可见。",
     });
     new Setting(containerEl).setName("主题").addDropdown((d) => {
-      THEMES.forEach((t) => d.addOption(t.id, `${t.group} · ${t.name}`));
+      THEMES.forEach((t) => d.addOption(t.id, t.name));
       d.setValue(s.themeId).onChange(async (v) => {
         s.themeId = v;
         s.themeColor = themeDefaultColor(v);

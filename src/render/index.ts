@@ -1,7 +1,7 @@
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js/lib/common";
 import { preprocessObsidian } from "./preprocess";
-import { LayoutId, MONO, resolveTheme, Theme, ThemeDecor } from "./theme";
+import { LayoutId, MONO, resolveTheme, Theme } from "./theme";
 import type { Tune } from "./profiles";
 import { texToSvg } from "./math";
 import { inlineCss } from "./inline-css";
@@ -53,15 +53,6 @@ const CALLOUT_LABELS: Record<string, string> = {
   done: "完成", tip: "技巧", todo: "待办", warning: "警示", missing: "缺失",
 };
 
-const CALLOUT_COLORS: Record<string, [string, string]> = {
-  note: ["#448aff", "ℹ️"], info: ["#448aff", "ℹ️"], abstract: ["#00b0ff", "📋"], summary: ["#00b0ff", "📋"],
-  tip: ["#00bfa5", "💡"], hint: ["#00bfa5", "💡"], important: ["#00bfa5", "🔥"], success: ["#00c853", "✅"],
-  check: ["#00c853", "✅"], done: ["#00c853", "✅"], question: ["#64dd17", "❓"], help: ["#64dd17", "❓"],
-  faq: ["#64dd17", "❓"], warning: ["#ff9100", "⚠️"], caution: ["#ff9100", "⚠️"], attention: ["#ff9100", "⚠️"],
-  failure: ["#ff5252", "❌"], fail: ["#ff5252", "❌"], missing: ["#ff5252", "❌"], danger: ["#ff1744", "⛔"],
-  error: ["#ff1744", "⛔"], bug: ["#f50057", "🐞"], example: ["#7c4dff", "📝"], quote: ["#9e9e9e", "💬"],
-  cite: ["#9e9e9e", "💬"], todo: ["#448aff", "☑️"],
-};
 
 function createMarkdown(breaks: boolean): InstanceType<typeof MarkdownIt> {
   const md: InstanceType<typeof MarkdownIt> = new MarkdownIt({
@@ -140,14 +131,12 @@ function macDots(): string {
 
 function transformCodeBlocks(root: Element, doc: Document, theme: Theme) {
   const ct = theme.code;
-  // 调色板主题的代码块与参考排版一致：代码字号为正文的 0.92 倍、行距 1.42、内边距在 code 上、注释不斜体
-  const palette = theme.kind === "palette";
+  // 代码块与参考排版一致：代码字号为正文的 0.92 倍、行距 1.42、内边距在 code 上、注释不斜体
   root.querySelectorAll("pre.wx-pre").forEach((pre) => {
     const code = pre.querySelector("code")!;
     code.querySelectorAll("span").forEach((span) => {
       const color = hljsColor(span, ct.palette);
-      const italic = !palette && (span.classList.contains("hljs-comment") || span.classList.contains("hljs-quote"));
-      const style = `${color ? `color:${color};` : ""}${italic ? "font-style:italic;" : ""}`;
+      const style = color ? `color:${color};` : "";
       if (style) span.setAttribute("style", style);
       span.removeAttribute("class");
     });
@@ -158,33 +147,16 @@ function transformCodeBlocks(root: Element, doc: Document, theme: Theme) {
     wrapper.setAttribute("style", `background:${ct.background};`);
     if (theme.showMacCodeHeader) {
       const header = doc.createElement("section");
-      header.setAttribute(
-        "style",
-        palette
-          ? `display:flex;align-items:center;padding:7px 12px;background:${ct.headerBackground};line-height:1;`
-          : `padding:8px 12px;background:${ct.headerBackground};line-height:1;`,
-      );
+      header.setAttribute("style", `display:flex;align-items:center;padding:7px 12px;background:${ct.headerBackground};line-height:1;`);
       header.innerHTML = macDots();
       wrapper.appendChild(header);
     }
-    if (palette) {
-      pre.setAttribute("style", `margin:0;padding:0;background:${ct.background};overflow-x:auto;border-radius:0;text-indent:0;`);
-      code.setAttribute(
-        "style",
-        `display:block;white-space:nowrap;font-family:${MONO};font-size:0.92em;line-height:1.42;text-indent:0;` +
-          `color:${ct.color};background:${ct.background};padding:0.8em 1em 1em;margin:0;border-radius:0;word-break:normal;`,
-      );
-    } else {
-      pre.setAttribute(
-        "style",
-        `margin:0;padding:12px 16px 14px;background:${ct.background};overflow-x:auto;border-radius:0;text-indent:0;`,
-      );
-      code.setAttribute(
-        "style",
-        `display:block;white-space:nowrap;font-family:${MONO};font-size:13px;line-height:1.65;text-indent:0;` +
-          `color:${ct.color};background:transparent;letter-spacing:0;padding:0;margin:0;word-break:normal;`,
-      );
-    }
+    pre.setAttribute("style", `margin:0;padding:0;background:${ct.background};overflow-x:auto;border-radius:0;text-indent:0;`);
+    code.setAttribute(
+      "style",
+      `display:block;white-space:nowrap;font-family:${MONO};font-size:0.92em;line-height:1.42;text-indent:0;` +
+        `color:${ct.color};background:${ct.background};padding:0.8em 1em 1em;margin:0;border-radius:0;word-break:normal;`,
+    );
     pre.parentNode!.replaceChild(wrapper, pre);
     wrapper.appendChild(pre);
   });
@@ -420,46 +392,25 @@ function transformLinks(root: Element, doc: Document, opts: RenderOptions) {
 
 // ---------------------------------------------------------------- Callout
 
-function transformCallouts(root: Element, doc: Document, mode: Theme["callout"]) {
+function transformCallouts(root: Element, doc: Document) {
   root.querySelectorAll("blockquote").forEach((bq) => {
     const first = bq.firstElementChild;
     if (!first || first.tagName !== "P") return;
     const m = first.innerHTML.match(/^\[!(\w+)\][+-]?[ \t]*([^\n<]*)(?:<br\s*\/?>)?(\n|$)/);
     if (!m) return;
     const type = m[1].toLowerCase();
-    const [color, icon] = CALLOUT_COLORS[type] ?? CALLOUT_COLORS.note;
     const label = m[2].trim() || CALLOUT_LABELS[type] || type.toUpperCase();
-    // 调色板主题：callout 就是一个引用块（所有引用规则、主题覆盖都作用于它）；装饰主题：独立的彩色提示框
-    const section = doc.createElement(mode === "quote" ? "blockquote" : "section");
-    section.className = "wx-callout";
-    const title = doc.createElement("section");
-    title.className = "wx-callout-title";
-    if (mode === "typed") {
-      // 装饰主题：按类型着色 + 图标
-      section.setAttribute("style", `border-left-color:${color};background:${color}14;`);
-      title.setAttribute("style", `color:${color};`);
-      title.innerHTML = `${icon} ${label}`;
-    } else {
-      // 调色板主题：与参考排版一致，callout 就是普通引用，标题作为引用的第一行
-      title.innerHTML = label;
-    }
-
+    // 与参考排版一致：callout 就是普通引用，标题作为引用的第一行
     first.innerHTML = first.innerHTML.slice(m[0].length);
     if (!first.innerHTML.trim()) first.remove();
-    if (mode === "quote") {
-      // 标题并入第一段的首行：“小提示<br>正文…”，由软换行处理成块级续行
-      const p = bq.firstElementChild?.tagName === "P" ? bq.firstElementChild : null;
-      if (p) p.innerHTML = `${label}<br>${p.innerHTML.replace(/^\n/, "")}`;
-      else {
-        const np = doc.createElement("p");
-        np.innerHTML = label;
-        bq.insertBefore(np, bq.firstChild);
-      }
-    } else {
-      section.appendChild(title);
+    // 标题并入第一段的首行：“小提示<br>正文…”，由软换行处理成块级续行
+    const p = bq.firstElementChild?.tagName === "P" ? bq.firstElementChild : null;
+    if (p) p.innerHTML = `${label}<br>${p.innerHTML.replace(/^\n/, "")}`;
+    else {
+      const np = doc.createElement("p");
+      np.innerHTML = label;
+      bq.insertBefore(np, bq.firstChild);
     }
-    while (bq.firstChild) section.appendChild(bq.firstChild);
-    bq.parentNode!.replaceChild(section, bq);
   });
 }
 
@@ -506,87 +457,64 @@ function transformMisc(root: Element, doc: Document) {
     t.parentNode!.replaceChild(wrap, t);
     wrap.appendChild(t);
   });
-  // 列表项里的纯文本包进 section，避免公众号编辑器插入空行/丢样式
+  // 列表项：文字放进行内 span（与参考排版一致）。块级元素（section/p）或标签间的空白
+  // 会被公众号编辑器拆成多余的空白列表项（出现“空圆点”），所以这里只留一个行内容器。
   root.querySelectorAll("li").forEach((li) => {
-    if (li.firstElementChild && li.firstElementChild.tagName === "P") return;
-    const sec = doc.createElement("section");
-    const moved: ChildNode[] = [];
+    const inline: ChildNode[] = [];
     for (const n of Array.from(li.childNodes)) {
       if (n.nodeName === "UL" || n.nodeName === "OL") break;
-      moved.push(n);
+      inline.push(n);
     }
-    if (!moved.length) return;
-    li.insertBefore(sec, moved[0]);
-    moved.forEach((n) => sec.appendChild(n));
+    if (!inline.length) return;
+    const span = doc.createElement("span");
+    span.className = "wx-li";
+    li.insertBefore(span, inline[0]);
+    let paragraphs = 0;
+    inline.forEach((n) => {
+      if (n.nodeName === "P") {
+        // 松散列表（条目之间有空行）里的段落：拆开合并进同一行，多段之间用换行
+        if (paragraphs++ > 0) span.appendChild(doc.createElement("br"));
+        while (n.firstChild) span.appendChild(n.firstChild);
+        n.parentNode!.removeChild(n);
+      } else {
+        span.appendChild(n);
+      }
+    });
+    // 去掉首尾换行空白
+    const first = span.firstChild;
+    if (first?.nodeType === 3) first.nodeValue = (first.nodeValue ?? "").replace(/^\s+/, "");
+    const last = span.lastChild;
+    if (last?.nodeType === 3) last.nodeValue = (last.nodeValue ?? "").replace(/\s+$/, "");
   });
 }
 
-// ---------------------------------------------------------------- 主题装饰
+const BLOCK_TAGS = new Set([
+  "SECTION", "BLOCKQUOTE", "UL", "OL", "LI", "TABLE", "THEAD", "TBODY", "TR", "FIGURE", "DIV",
+  "P", "H1", "H2", "H3", "H4", "H5", "H6", "PRE", "HR", "IMG", "SVG",
+]);
 
-function applyDecor(root: Element, doc: Document, decor: ThemeDecor) {
-  const span = (cls: string, text: string) => {
-    const el = doc.createElement("span");
-    el.className = cls;
-    el.textContent = text;
-    return el;
-  };
-  const section = (cls: string, text: string) => {
-    const el = doc.createElement("section");
-    el.className = cls;
-    el.textContent = text;
-    return el;
-  };
-
-  (["h1", "h2", "h3", "h4"] as const).forEach((level) => {
-    const pre = decor.headingPrefix?.[level];
-    const suf = decor.headingSuffix?.[level];
-    root.querySelectorAll(level).forEach((h) => {
-      const content = h.querySelector("span.wx-h");
-      if (!content) return;
-      if (pre) h.insertBefore(span("wx-h-pre", pre), content);
-      if (suf) h.appendChild(span("wx-h-suf", suf));
-    });
-  });
-
-  if (decor.h2Number) {
-    root.querySelectorAll("h2").forEach((h, i) => {
-      h.insertBefore(span("wx-h-num", String(i + 1).padStart(2, "0")), h.firstChild);
-    });
+/**
+ * 去掉块级元素之间的纯空白文本（markdown-it 在块之间输出的换行）。
+ * 公众号编辑器会把这些空白当成内容：列表里变成空的列表项，其它地方变成多余的空行。
+ * 段落内部（行内元素之间）的空格保留，英文单词间的空格不受影响。
+ */
+function stripBlockWhitespace(root: Element) {
+  const walker = root.ownerDocument.createTreeWalker(root, 4 /* NodeFilter.SHOW_TEXT */);
+  const remove: Text[] = [];
+  while (walker.nextNode()) {
+    const t = walker.currentNode as Text;
+    if ((t.nodeValue ?? "").trim()) continue;
+    const parent = t.parentElement;
+    const prev = t.previousSibling;
+    const next = t.nextSibling;
+    const blockish = (n: Node | null) => !n || (n.nodeType === 1 && BLOCK_TAGS.has((n as Element).tagName.toUpperCase()));
+    if (!parent) continue;
+    const parentIsContainer = ["SECTION", "BLOCKQUOTE", "UL", "OL", "LI", "TABLE", "THEAD", "TBODY", "TR", "FIGURE", "DIV"].includes(
+      parent.tagName.toUpperCase(),
+    );
+    if (parentIsContainer && blockish(prev) && blockish(next)) remove.push(t);
   }
-
-  if (decor.quoteMark) {
-    root.querySelectorAll("blockquote").forEach((bq) => {
-      bq.insertBefore(section("wx-quote-mark", decor.quoteMark!), bq.firstChild);
-    });
-  }
-
-  if (decor.hr) {
-    root.querySelectorAll("hr").forEach((hr) => hr.parentNode!.replaceChild(section("wx-hr", decor.hr!), hr));
-  }
-
-  if (decor.ending) {
-    // 放在“参考链接”之前
-    const notes = Array.from(root.children).find((c) => c.classList.contains("wx-footnotes"));
-    root.insertBefore(section("wx-ending", decor.ending), notes ?? null);
-  }
-}
-
-// ---------------------------------------------------------------- 样式内联
-
-function applyTheme(root: Element, styles: Record<string, string>) {
-  const acc = new Map<Element, string>();
-  const add = (el: Element, s: string) => acc.set(el, (acc.get(el) ?? "") + s);
-  for (const [selector, style] of Object.entries(styles)) {
-    if (selector === "root") {
-      add(root, style);
-      continue;
-    }
-    root.querySelectorAll(selector).forEach((el) => add(el, style));
-  }
-  // 主题样式在前，元素自身（代码块、图片宽度、callout 颜色等）样式在后，后者优先
-  acc.forEach((themeStyle, el) => {
-    el.setAttribute("style", themeStyle + (el.getAttribute("style") ?? ""));
-  });
+  remove.forEach((t) => t.remove());
 }
 
 function cleanAttributes(root: Element) {
@@ -619,7 +547,7 @@ export async function renderForWechat(source: string, opts: RenderOptions): Prom
 
   const theme = resolveTheme({ themeId: opts.themeId, themeColor: opts.themeColor, layout: opts.layout, tune: opts.tune });
 
-  transformCallouts(root, doc, theme.callout);
+  transformCallouts(root, doc);
   await transformMath(root, doc, opts, theme, warnings);
   await transformMermaid(root, doc, opts, warnings);
   transformCodeBlocks(root, doc, theme);
@@ -627,13 +555,9 @@ export async function renderForWechat(source: string, opts: RenderOptions): Prom
   transformLinks(root, doc, opts);
   transformMisc(root, doc);
 
-  applyDecor(root, doc, theme.decor);
-  if (theme.kind === "palette") {
-    root.classList.add("wxp-root");
-    inlineCss(root, theme.css);
-  } else {
-    applyTheme(root, theme.styles);
-  }
+  stripBlockWhitespace(root);
+  root.classList.add("wxp-root");
+  inlineCss(root, theme.css);
   cleanAttributes(root);
 
   return { html: root.outerHTML, images, warnings };

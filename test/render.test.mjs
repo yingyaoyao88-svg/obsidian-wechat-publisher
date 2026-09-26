@@ -25,7 +25,7 @@ assert.ok(h.includes("图注文字"), "图注");
 assert.ok(h.includes("[1] 外链: https://example.com"), "外链转脚注");
 assert.ok(/<br>/.test(h) && h.includes("<br>&nbsp;&nbsp;&nbsp;&nbsp;<span"), "代码空白处理");
 assert.ok(h.includes("color:#c678dd"), "代码高亮内联颜色");
-assert.ok(h.includes(">小提示<") && !h.includes("[!tip]"), "callout（调色板主题：与引用同款、无图标）");
+assert.ok(h.includes(">小提示<") && !h.includes("[!tip]"), "callout（与引用同款、标题作为首行）");
 assert.ok(!h.includes("[[不应处理]]"), "callout 内双链也会转文本");
 assert.ok(h.includes("☐") && h.includes("☑"), "任务列表");
 assert.ok(res.warnings.length === 0, res.warnings.join());
@@ -49,19 +49,12 @@ for (const t of THEMES) {
   gallery += `<div style="width:400px;flex:none;border:1px solid #ddd;padding:8px"><div style="font:bold 14px sans-serif;margin-bottom:6px">${t.name}（${t.id}）</div>${r.html}</div>`;
 }
 writeFileSync(new URL("./.build/gallery.html", import.meta.url), `<meta charset=utf-8><body style="display:flex;flex-wrap:wrap;gap:12px;width:1700px">${gallery}</body>`);
-// 结构装饰确实插入了
-const renderWith = (id) => renderForWechat(md, {
-  themeId: id, themeColor: THEMES.find((t) => t.id === id).defaultColor, linkToFootnote: true, resolveImage: async (s) => s,
-  parseHTML: (h) => new JSDOM(h).window.document,
-});
-const xhs = (await renderWith("xhs")).html;
-assert.ok(xhs.includes("📌 ") && xhs.includes("✨ ") && xhs.includes("✿") && xhs.includes("— 完 —"), "小红书风装饰");
-assert.ok(xhs.indexOf("— 完 —") < xhs.indexOf("参考链接"), "结束标记应在参考链接之前");
-const kin = (await renderWith("kinfolk")).html;
-assert.ok(kin.includes(">01<") && kin.includes(">02<") && kin.includes("“") && kin.includes("FIN."), "日系杂志编号/引号/结尾");
-assert.ok(!kin.includes("<hr"), "hr 已替换成文字分隔");
-const brutal = (await renderWith("brutal")).html;
-assert.ok(brutal.includes("box-shadow:5px 5px 0 #000"), "新野兽派代码框硬投影");
+// 只保留 17 款调色板主题；已移除主题的旧 ID 自动映射
+assert.equal(THEMES.length, 17, "主题数量");
+assert.ok(THEMES.every((t) => t.group === "经典"), "只剩调色板主题");
+const legacy = await renderForWechat(md, { themeId: "xhs", linkToFootnote: true, resolveImage: async (s) => s, parseHTML: (h) => new JSDOM(h).window.document });
+const sunrise = await renderForWechat(md, { themeId: "sunrise", linkToFootnote: true, resolveImage: async (s) => s, parseHTML: (h) => new JSDOM(h).window.document });
+assert.equal(legacy.html, sunrise.html, "旧 ID xhs → 朝阳橙");
 console.log(`themes ok: ${THEMES.length} 个主题`);
 
 // ---- 公式 / Mermaid / 排版模板 / 后台链接
@@ -153,3 +146,21 @@ API IP 白名单`);
 assert.deepEqual(pasted, { appId: "wx0123456789abcdef", appSecret: "0123456789abcdef0123456789abcdef", name: "我的技术小站" });
 assert.equal(parseAccountText("随便一段文字"), null);
 console.log("parse ok");
+
+// ---- 列表不能出现“空圆点”：公众号编辑器会把块级元素和标签间空白拆成空列表项
+{
+  const tight = "把你工作中经常遇到的英文词汇整理出来。来源可以是：\n\n- 你的英文邮件\n- 行业报告\n- 会议 PPT\n- 客户文档\n\n把这些文档丢给豆包工作";
+  const loose = "来源可以是：\n\n- 你的英文邮件\n\n- 行业报告\n\n- 会议 PPT\n\n- 客户文档\n    - 嵌套一\n    - 嵌套二\n\n结尾";
+  for (const [name, src] of [["紧凑列表", tight], ["松散列表", loose]]) {
+    const html = (await renderForWechat(src, base)).html;
+    const items = html.match(/<li[^>]*>[\s\S]*?(?=<li|<\/ul>|<\/ol>)/g) ?? [];
+    assert.ok(items.length >= 4, `${name}：应有列表项`);
+    items.forEach((li) => assert.ok(/[一-鿿A-Za-z]/.test(li.replace(/<[^>]+>/g, "")), `${name}：出现空列表项 ${li}`));
+    assert.ok(!/<li[^>]*>\s*<(section|p)\b/.test(html), `${name}：列表项里不应有块级 section/p`);
+    assert.ok(!/>\s+<(\/?)(li|ul|ol|p|section|blockquote|h[1-6]|table|tr|td|th)\b/.test(html), `${name}：块级标签之间不应有空白`);
+  }
+  // 行内元素之间的空格要保留
+  const spaced = (await renderForWechat("hello **bold** *em* world", base)).html;
+  assert.ok(/<\/strong> <em/.test(spaced), "行内元素之间的空格保留");
+}
+console.log("lists ok");

@@ -316,7 +316,7 @@ export class WechatPreviewView extends ItemView {
 
     // 主题网格
     for (const group of [...new Set(THEMES.map((t) => t.group))]) {
-      panel.createDiv({ cls: "wxp-section-title", text: `主题 · ${group}` });
+      panel.createDiv({ cls: "wxp-section-title", text: "主题" });
       const grid = panel.createDiv({ cls: "wxp-theme-grid" });
       THEMES.filter((t) => t.group === group).forEach((t) => {
         const card = grid.createDiv({ cls: "wxp-theme-card" + (t.id === s.themeId ? " is-active" : "") });

@@ -97,7 +97,6 @@ ${quoteSel}{font-size:${p.fontSize}px;line-height:${p.lineHeight};color:${c.text
 .wxp-root blockquote p{text-indent:0;}
 .wxp-root blockquote > :first-child{margin-top:0;}
 .wxp-root blockquote > :last-child{margin-bottom:0;}
-.wxp-root .wx-callout-title{font-weight:bold;color:${c.primary};margin-bottom:0.3em;}
 .wxp-root p .wx-br-line{display:block;}
 .wxp-root img{display:block;max-width:100%;height:auto;margin:0.4em auto 0.8em;border-radius:${p.imageBorderRadius};}
 .wxp-root img.wx-diagram{background:#ffffff;padding:0.4em;}
@@ -112,8 +111,6 @@ ${quoteSel}{font-size:${p.fontSize}px;line-height:${p.lineHeight};color:${c.text
 .wxp-root section.wx-footnotes{margin:2.5em 8px 0;font-size:0.82em;color:${c.secondary};}
 .wxp-root section.wx-footnotes p{margin:0.3em 0;color:${c.secondary};text-indent:0;word-break:break-all;line-height:1.6;}
 .wxp-root section.wx-footnotes-title{font-weight:bold;color:${c.text};margin-bottom:0.6em;}
-.wxp-root section.wx-hr{text-align:center;color:${c.secondary};margin:2em 0;}
-.wxp-root section.wx-ending{text-align:center;color:${c.secondary};margin:3em 0 1em;letter-spacing:0.3em;font-size:0.85em;}
 ${theme.cssOverrides ?? ""}
 `;
 }
