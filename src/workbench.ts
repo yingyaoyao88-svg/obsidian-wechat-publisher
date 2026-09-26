@@ -1,39 +1,41 @@
-import { debounce, ItemView, MarkdownView, Menu, setIcon, TFile, WorkspaceLeaf } from "obsidian";
+import { debounce, ItemView, MarkdownView, Menu, Notice, setIcon, TFile, WorkspaceLeaf } from "obsidian";
 import type { EditorView } from "@codemirror/view";
 import type WechatPublisherPlugin from "./main";
 import type { Reporter, StepId, StepState } from "./main";
 import { HELP_URL, MP_HOME } from "./links";
 import { PROFILES, resolveProfile, THEMES } from "./render";
-import type { LayoutId } from "./render";
+import type { LayoutId, RenderResult } from "./render";
+import { VaultImageSuggest } from "./meta";
+import { loadBrowserFile } from "./wechat/images";
 
 export const VIEW_TYPE_WECHAT_PREVIEW = "wechat-mp-publisher-preview";
 
-
 /**
- * 预览工作台。
+ * 预览工作台：一个干净的页面，所见即所发。
  *
- *   ┌ 上层 ─────────────────────────────────────┐
- *   │ [封面] 标题 / 作者 / 封面来源      发布到：主号 ▾ │  ← 点击编辑本次发布资料
- *   ├ 下层 ─────────────────────────────────────┤
- *   │ [格式 ▾] [复制排版] [发布草稿]            [⋯] │
- *   └──────────────────────────────────────────┘
- *     发布进度（步骤列表）/ 状态行
- *     手机宽度的文章预览（Shadow DOM，与发布内容是同一份 HTML）
+ *   [图标]                      [推送到草稿箱]  ⚙  ●      ← ● 绿色 = 可以发布；琥珀色 = 有待处理的问题
+ *   📄 正在预览 · 文章.md · 约 3,982 字
+ *   ┌──────────────────────────────┐
+ *   │  封面（2.35:1，点击/拖入图片更换） │
+ *   │  文章标题（大号粗体）             │
+ *   │  正文（与推送内容是同一份 HTML）   │
+ *   └──────────────────────────────┘
  *
- * “所见即所发”：预览和发布调用同一个渲染函数，只是图片地址不同（本地资源 vs 微信图床）。
+ * 其余功能（排版样式、复制排版、标题/作者/摘要、账号、滚动同步、帮助）都收在 ⚙ 菜单里。
  */
 export class WechatPreviewView extends ItemView {
   private file: TFile | null = null;
   private renderSeq = 0;
 
-  private headerEl!: HTMLElement;
-  private toolbarEl!: HTMLElement;
-  private showBarEl!: HTMLElement;
+  private topEl!: HTMLElement;
+  private subEl!: HTMLElement;
   private formatPanel: HTMLElement | null = null;
   private progressEl!: HTMLElement;
-  private statusEl!: HTMLElement;
   private phoneEl!: HTMLElement;
+  private coverEl!: HTMLElement;
   private shadow!: ShadowRoot;
+  private dotEl!: HTMLElement;
+  private issues: string[] = [];
 
   private syncCleanup: (() => void) | null = null;
 
@@ -56,18 +58,15 @@ export class WechatPreviewView extends ItemView {
     root.empty();
     root.addClass("wxp-view");
 
-    this.showBarEl = root.createDiv({ cls: "wxp-showbar", text: "⌄ 显示工具栏" });
-    this.showBarEl.onclick = () => this.setToolbarHidden(false);
-
-    this.headerEl = root.createDiv({ cls: "wxp-header" });
-    this.toolbarEl = root.createDiv({ cls: "wxp-toolbar" });
-    this.buildToolbar();
+    this.topEl = root.createDiv({ cls: "wxp-topbar" });
+    this.buildTopbar();
+    this.subEl = root.createDiv({ cls: "wxp-subline" });
     this.progressEl = root.createDiv({ cls: "wxp-progress" });
-    this.statusEl = root.createDiv({ cls: "wxp-status" });
     this.phoneEl = root.createDiv({ cls: "wxp-phone" });
-    const stage = this.phoneEl.createDiv({ cls: "wxp-stage" });
+    const card = this.phoneEl.createDiv({ cls: "wxp-card" });
+    this.coverEl = card.createDiv({ cls: "wxp-cover" });
+    const stage = card.createDiv({ cls: "wxp-stage" });
     this.shadow = stage.attachShadow({ mode: "open" });
-    this.applyToolbarHidden();
 
     this.registerEvent(
       this.app.workspace.on("file-open", (f) => {
@@ -83,9 +82,7 @@ export class WechatPreviewView extends ItemView {
     this.registerEvent(this.app.vault.on("modify", (f) => f instanceof TFile && onModify(f)));
     this.registerEvent(this.app.metadataCache.on("changed", (f) => f === this.file && onModify(f)));
     this.registerDomEvent(document, "click", (e) => {
-      if (this.formatPanel && !this.formatPanel.contains(e.target as Node) && !(e.target as HTMLElement).closest(".wxp-format-btn")) {
-        this.closeFormatPanel();
-      }
+      if (this.formatPanel && !this.formatPanel.contains(e.target as Node)) this.closeFormatPanel();
     });
     this.registerDomEvent(document, "keydown", (e) => {
       if (e.key === "Escape") this.closeFormatPanel();
@@ -105,40 +102,73 @@ export class WechatPreviewView extends ItemView {
     this.update();
   }
 
-  // ------------------------------------------------------------ 工具栏
+  // ------------------------------------------------------------ 顶栏
 
-  private buildToolbar() {
-    const bar = this.toolbarEl;
+  private buildTopbar() {
+    const bar = this.topEl;
     bar.empty();
-    const btn = (text: string, icon: string, cls = "") => {
-      const b = bar.createEl("button", { cls: `wxp-btn ${cls}` });
-      setIcon(b.createSpan({ cls: "wxp-btn-icon" }), icon);
-      b.createSpan({ text });
-      return b;
-    };
-    const fmt = btn("格式", "palette", "wxp-format-btn");
-    fmt.onclick = () => (this.formatPanel ? this.closeFormatPanel() : this.openFormatPanel());
+    const logo = bar.createDiv({ cls: "wxp-logo", attr: { "aria-label": "WeChat MP Publisher" } });
+    setIcon(logo, "feather");
 
-    const copy = btn("复制排版", "copy");
-    copy.title = "复制微信兼容的正文，到公众号编辑器里粘贴";
-    copy.onclick = () => this.file && this.plugin.copyToClipboard(this.file, this.reporter());
+    const publish = bar.createEl("button", { cls: "wxp-publish" });
+    setIcon(publish.createSpan({ cls: "wxp-publish-icon" }), "send");
+    publish.createSpan({ text: "推送到草稿箱" });
+    publish.onclick = () => this.publish();
 
-    const pub = btn("发布草稿", "send", "mod-cta");
-    pub.title = "上传图片与封面，写入公众号草稿箱（不会群发）";
-    pub.onclick = () => this.file && this.plugin.publishDraft(this.file, this.reporter());
+    const gear = bar.createEl("button", { cls: "wxp-icon-btn", attr: { "aria-label": "更多" } });
+    setIcon(gear, "settings");
+    gear.onclick = (e) => this.openMenu(e);
 
-    const more = bar.createEl("button", { cls: "wxp-btn wxp-more clickable-icon", attr: { "aria-label": "更多" } });
-    setIcon(more, "more-horizontal");
-    more.onclick = (e) => this.openMoreMenu(e);
+    this.dotEl = bar.createDiv({ cls: "wxp-dot-status" });
+    this.dotEl.onclick = (e) => this.openStatus(e);
   }
 
-  private openMoreMenu(e: MouseEvent) {
+  private publish() {
+    if (!this.file) return;
+    const acc = this.plugin.activeAccount;
+    if (!acc || !acc.appId || !acc.appSecret) {
+      new Notice("先添加公众号账号（AppID / AppSecret），之后就能一键推送");
+      this.plugin.openAccountManager(() => this.update());
+      return;
+    }
+    this.plugin.publishDraft(this.file, this.reporter());
+  }
+
+  private openMenu(e: MouseEvent) {
+    e.stopPropagation();
     const s = this.plugin.settings;
     const menu = new Menu();
+    menu.addItem((i) => i.setTitle("排版样式…").setIcon("palette").onClick(() => this.openFormatPanel()));
+    menu.addItem((i) =>
+      i
+        .setTitle("复制排版（手动粘贴到公众号）")
+        .setIcon("copy")
+        .onClick(() => this.file && this.plugin.copyToClipboard(this.file, this.reporter())),
+    );
+    menu.addItem((i) =>
+      i.setTitle("标题 / 作者 / 摘要…").setIcon("file-pen").onClick(() => this.file && this.plugin.openMetaEditor(this.file)),
+    );
+    menu.addSeparator();
+    const acc = this.plugin.activeAccount;
+    this.plugin.settings.accounts.forEach((a) =>
+      menu.addItem((i) =>
+        i
+          .setTitle(`发布到：${a.name}`)
+          .setChecked(a.id === acc?.id)
+          .onClick(() => this.plugin.setActiveAccount(a.id)),
+      ),
+    );
+    menu.addItem((i) =>
+      i
+        .setTitle(s.accounts.length ? "管理账号…" : "添加公众号账号…")
+        .setIcon("user-cog")
+        .onClick(() => this.plugin.openAccountManager(() => this.update())),
+    );
+    menu.addSeparator();
     menu.addItem((i) => i.setTitle("刷新预览").setIcon("refresh-cw").onClick(() => this.update()));
     menu.addItem((i) =>
       i
-        .setTitle(`滚动同步${s.scrollSync ? "（已开启）" : ""}`)
+        .setTitle("滚动同步")
         .setIcon("arrow-up-down")
         .setChecked(s.scrollSync)
         .onClick(async () => {
@@ -147,15 +177,22 @@ export class WechatPreviewView extends ItemView {
           this.attachScrollSync();
         }),
     );
-    menu.addItem((i) => i.setTitle("隐藏工具栏").setIcon("panel-top-close").onClick(() => this.setToolbarHidden(true)));
-    menu.addSeparator();
-    menu.addItem((i) =>
-      i.setTitle("编辑本次发布资料").setIcon("file-pen").onClick(() => this.file && this.plugin.openMetaEditor(this.file)),
-    );
     menu.addItem((i) => i.setTitle("打开公众号后台").setIcon("external-link").onClick(() => window.open(MP_HOME)));
-    menu.addItem((i) => i.setTitle("账号配置").setIcon("user-cog").onClick(() => this.plugin.openAccountManager()));
     menu.addItem((i) => i.setTitle("插件设置").setIcon("settings").onClick(() => this.openSettings()));
     menu.addItem((i) => i.setTitle("使用帮助").setIcon("help-circle").onClick(() => window.open(HELP_URL)));
+    menu.showAtMouseEvent(e);
+  }
+
+  /** 状态点：就绪 / 待处理的问题一目了然，点开看详情 */
+  private openStatus(e: MouseEvent) {
+    const acc = this.plugin.activeAccount;
+    const menu = new Menu();
+    if (!this.issues.length) {
+      menu.addItem((i) => i.setTitle(`✅ 已就绪，将推送到「${acc?.name}」`).setDisabled(true));
+    } else {
+      this.issues.forEach((t) => menu.addItem((i) => i.setTitle(`⚠️ ${t}`).setDisabled(true)));
+    }
+    if (!acc) menu.addItem((i) => i.setTitle("添加公众号账号…").onClick(() => this.plugin.openAccountManager(() => this.update())));
     menu.showAtMouseEvent(e);
   }
 
@@ -165,61 +202,78 @@ export class WechatPreviewView extends ItemView {
     setting.openTabById(this.plugin.manifest.id);
   }
 
-  private async setToolbarHidden(hidden: boolean) {
-    this.plugin.settings.toolbarHidden = hidden;
-    await this.plugin.saveSettings();
-    this.applyToolbarHidden();
-  }
+  // ------------------------------------------------------------ 封面
 
-  private applyToolbarHidden() {
-    const hidden = this.plugin.settings.toolbarHidden;
-    this.contentEl.toggleClass("is-toolbar-hidden", hidden);
-    if (hidden) this.closeFormatPanel();
-  }
+  private renderCover(cover: { label: string; previewUrl: string | null }) {
+    const el = this.coverEl;
+    el.empty();
+    el.toggleClass("is-empty", !cover.previewUrl);
+    const file = this.file;
+    if (!file) return;
 
-  // ------------------------------------------------------------ 上层：稿件资料 + 账号
-
-  private renderHeader(title: string, author: string, cover: { label: string; previewUrl: string | null }) {
-    const h = this.headerEl;
-    h.empty();
-    const card = h.createDiv({ cls: "wxp-article", attr: { "aria-label": "编辑本次发布资料" } });
-    const thumb = card.createDiv({ cls: "wxp-cover-thumb" });
-    if (cover.previewUrl) thumb.createEl("img", { attr: { src: cover.previewUrl } });
-    else setIcon(thumb, "image-off");
-    const info = card.createDiv({ cls: "wxp-article-info" });
-    info.createDiv({ cls: "wxp-article-title", text: title });
-    const sub = info.createDiv({ cls: "wxp-article-sub" });
-    sub.createSpan({ text: author || "未设置作者" });
-    sub.createSpan({ cls: "wxp-dot", text: "·" });
-    sub.createSpan({ cls: cover.previewUrl ? "" : "wxp-warn", text: `封面：${cover.label}` });
-    const edit = card.createDiv({ cls: "wxp-edit-hint" });
-    setIcon(edit, "pencil");
-    card.onclick = () => this.file && this.plugin.openMetaEditor(this.file);
-
-    const accBox = h.createDiv({ cls: "wxp-account" });
-    accBox.createDiv({ cls: "wxp-account-label", text: "发布到" });
-    const acc = this.plugin.activeAccount;
-    const chip = accBox.createDiv({ cls: "wxp-account-chip" + (acc ? "" : " is-empty") });
-    chip.createSpan({ text: acc ? acc.name : "添加账号" });
-    setIcon(chip.createSpan({ cls: "wxp-chevron" }), "chevron-down");
-    chip.onclick = (e) => {
-      if (!this.plugin.settings.accounts.length) {
-        this.plugin.openAccountManager();
-        return;
-      }
-      const menu = new Menu();
-      this.plugin.settings.accounts.forEach((a) =>
-        menu.addItem((i) =>
-          i
-            .setTitle(a.name)
-            .setChecked(a.id === acc?.id)
-            .onClick(() => this.plugin.setActiveAccount(a.id)),
-        ),
-      );
-      menu.addSeparator();
-      menu.addItem((i) => i.setTitle("管理账号…").setIcon("user-cog").onClick(() => this.plugin.openAccountManager()));
-      menu.showAtMouseEvent(e);
+    const pickFromComputer = () => {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "image/png,image/jpeg,image/gif,image/webp";
+      input.onchange = async () => {
+        const f = input.files?.[0];
+        if (f) await this.setCoverFromFile(file, f);
+      };
+      input.click();
     };
+    const pickFromVault = () =>
+      new VaultImageSuggest(this.app, (f) => this.plugin.setCoverOverride(file, { kind: "vault", path: f.path })).open();
+
+    if (cover.previewUrl) {
+      el.createEl("img", { attr: { src: cover.previewUrl, alt: "封面" } });
+      el.createDiv({ cls: "wxp-cover-tag", text: `封面 · ${cover.label}` });
+      const change = el.createEl("button", { cls: "wxp-cover-change" });
+      setIcon(change.createSpan(), "image-plus");
+      change.createSpan({ text: "更换封面" });
+      change.onclick = (e) => {
+        e.stopPropagation();
+        const menu = new Menu();
+        menu.addItem((i) => i.setTitle("从电脑选择…").setIcon("upload").onClick(pickFromComputer));
+        menu.addItem((i) => i.setTitle("从库中选择…").setIcon("image").onClick(pickFromVault));
+        if (this.plugin.activeAccount?.defaultCover) {
+          menu.addItem((i) =>
+            i.setTitle("用账号默认封面").setIcon("user").onClick(() => this.plugin.setCoverOverride(file, { kind: "account" })),
+          );
+        }
+        if (this.plugin.getOverride(file).cover) {
+          menu.addItem((i) =>
+            i.setTitle("恢复自动（正文首图）").setIcon("rotate-ccw").onClick(() => this.plugin.setCoverOverride(file, undefined)),
+          );
+        }
+        menu.showAtMouseEvent(e);
+      };
+    } else {
+      const box = el.createDiv({ cls: "wxp-cover-empty" });
+      const up = box.createEl("button", { cls: "wxp-cover-upload" });
+      setIcon(up.createSpan(), "image-plus");
+      up.createSpan({ text: "上传封面" });
+      up.onclick = pickFromComputer;
+      const alt = box.createEl("a", { cls: "wxp-cover-alt", text: "或从库中选择" });
+      alt.onclick = pickFromVault;
+      box.createDiv({ cls: "wxp-cover-hint", text: "也可以把图片拖到这里 · 建议 900×383" });
+    }
+
+    // 拖入图片直接设为封面
+    el.ondragover = (e) => {
+      e.preventDefault();
+      el.addClass("is-drag");
+    };
+    el.ondragleave = () => el.removeClass("is-drag");
+    el.ondrop = async (e) => {
+      e.preventDefault();
+      el.removeClass("is-drag");
+      const f = e.dataTransfer?.files?.[0];
+      if (f && f.type.startsWith("image/")) await this.setCoverFromFile(file, f);
+    };
+  }
+
+  private async setCoverFromFile(file: TFile, f: File) {
+    this.plugin.setCoverOverride(file, { kind: "file", image: await loadBrowserFile(f), previewUrl: URL.createObjectURL(f) });
   }
 
   // ------------------------------------------------------------ 格式面板
@@ -233,8 +287,8 @@ export class WechatPreviewView extends ItemView {
     this.closeFormatPanel();
     const s = this.plugin.settings;
     const panel = createDiv({ cls: "wxp-format-panel" });
-    this.toolbarEl.insertAdjacentElement("afterend", panel);
-    panel.style.top = `${this.toolbarEl.offsetTop + this.toolbarEl.offsetHeight + 4}px`;
+    this.subEl.insertAdjacentElement("afterend", panel);
+    panel.style.top = `${this.subEl.offsetTop + this.subEl.offsetHeight + 4}px`;
     this.formatPanel = panel;
 
     const apply = async (fn: () => void) => {
@@ -374,49 +428,60 @@ export class WechatPreviewView extends ItemView {
   async update() {
     const seq = ++this.renderSeq;
     if (!this.file) {
-      this.headerEl.empty();
-      this.shadow.innerHTML = `<p style="color:#999;text-align:center;padding:40px 0;font-family:sans-serif">打开一篇笔记即可预览</p>`;
-      this.statusEl.setText("");
+      this.subEl.setText("打开一篇笔记即可预览");
+      this.coverEl.empty();
+      this.shadow.innerHTML = "";
+      this.setStatus(["没有打开的笔记"]);
       return;
     }
     const file = this.file;
-    let result, meta;
+    let result: RenderResult, meta;
     try {
       ({ result, meta } = await this.plugin.renderFile(file, "preview"));
     } catch (e) {
-      this.statusEl.setText(`预览失败：${(e as Error).message}`);
+      this.subEl.setText(`预览失败：${(e as Error).message}`);
       return;
     }
+    const words = await this.plugin.wordCount(file);
     if (seq !== this.renderSeq) return; // 已有更新的渲染
 
-    this.renderHeader(meta.title, meta.author, this.plugin.resolveCover(file, result.images));
+    // 副标题：正在预览哪篇、多少字；有需要注意的问题时附一句
+    this.subEl.empty();
+    setIcon(this.subEl.createSpan({ cls: "wxp-sub-icon" }), "file-text");
+    this.subEl.createSpan({ text: `正在预览 · ${file.name} · 约 ${words.toLocaleString()} 字` });
+
+    this.renderCover(this.plugin.resolveCover(file, result.images));
 
     const phoneScroll = this.phoneEl.scrollTop;
     const font = "-apple-system,'PingFang SC','Microsoft YaHei',sans-serif";
     this.shadow.innerHTML =
       `<style>:host{all:initial;display:block}img{max-width:100%}</style>` +
-      `<div style="background:#fff;padding:20px 16px 40px;">` +
-      `<h1 style="font-size:22px;line-height:1.4;margin:0 0 14px;font-weight:bold;color:#1a1a1a;font-family:${font};">${escapeHtml(meta.title)}</h1>` +
-      `<div style="font-size:15px;color:#576b95;margin-bottom:22px;font-family:${font};">${escapeHtml(meta.author || "")}</div>` +
+      `<div style="padding:22px 20px 40px;">` +
+      `<h1 style="font-size:26px;line-height:1.35;margin:0 0 10px;font-weight:800;color:#111;letter-spacing:0.01em;font-family:${font};">${escapeHtml(meta.title)}</h1>` +
+      (meta.author ? `<div style="font-size:14px;color:#8a8a8a;margin-bottom:20px;font-family:${font};">${escapeHtml(meta.author)}</div>` : `<div style="height:12px"></div>`) +
       `<div id="wxp-article">${result.html}</div>` +
       `</div>`;
     this.phoneEl.scrollTop = phoneScroll;
 
-    // 预览里的图片是本地地址/内嵌 base64，发布时会换成约 100 字符的微信图床地址，按发布后的长度估算
+    // 发布前检查 + 超长提示 + 渲染警告，汇总到状态点
     const publishHtml = result.html.replace(/src="[^"]*"/g, `src="${"x".repeat(100)}"`);
-    const size = new TextEncoder().encode(publishHtml).length;
-    const warn = publishHtml.length >= 20000 ? " · ⚠️ 超过接口文档的 2 万字符上限，推送可能失败" : "";
-    this.statusEl.setText(
-      `${result.images.length} 张图 · 约 ${publishHtml.length} 字符 · ${(size / 1024).toFixed(0)} KB${warn}` +
-        (result.warnings.length ? ` · ${result.warnings.join("；")}` : ""),
-    );
     const issues = this.plugin.preflight(file, result);
+    if (publishHtml.length >= 20000) issues.push(`正文约 ${publishHtml.length} 字符，超过公众号 2 万字符上限，推送可能失败`);
+    issues.push(...result.warnings);
+    this.setStatus(issues);
     if (issues.length) {
-      const list = this.statusEl.createDiv({ cls: "wxp-preflight" });
-      issues.forEach((i) => list.createDiv({ text: `⚠️ ${i}` }));
+      const warn = this.subEl.createSpan({ cls: "wxp-sub-warn", text: ` · ${issues.length} 项需要处理` });
+      warn.onclick = (e) => this.openStatus(e);
     }
-    this.statusEl.toggleClass("is-warning", !!warn || result.warnings.length > 0);
     this.attachScrollSync();
+  }
+
+  private setStatus(issues: string[]) {
+    this.issues = issues;
+    const acc = this.plugin.activeAccount;
+    const ready = !issues.length && !!acc;
+    this.dotEl.className = `wxp-dot-status ${ready ? "is-ready" : acc ? "is-warn" : "is-off"}`;
+    this.dotEl.setAttribute("aria-label", ready ? `已就绪 · 推送到「${acc?.name}」` : issues.join("\n"));
   }
 
   // ------------------------------------------------------------ 滚动同步（编辑器 → 预览）

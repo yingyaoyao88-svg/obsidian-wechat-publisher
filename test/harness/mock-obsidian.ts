@@ -33,7 +33,7 @@ export class WorkspaceLeaf {}
 export class Notice { constructor(public m: string) { console.log("Notice:", m); } setMessage(m: string) { this.m = m; } hide() {} }
 export class Menu {
   items: any[] = [];
-  addItem(cb: (i: any) => void) { const i: any = { setTitle: (t: string) => ((i.t = t), i), setIcon: () => i, setChecked: (c: boolean) => ((i.c = c), i), onClick: () => i }; cb(i); this.items.push(i); return this; }
+  addItem(cb: (i: any) => void) { const i: any = { setTitle: (t: string) => ((i.t = t), i), setIcon: () => i, setChecked: (c: boolean) => ((i.c = c), i), setDisabled: () => i, onClick: () => i }; cb(i); this.items.push(i); return this; }
   addSeparator() { return this; }
   showAtMouseEvent() {}
 }

@@ -1,7 +1,7 @@
 {
   "id": "wechat-mp-publisher",
   "name": "WeChat MP Publisher",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "minAppVersion": "1.4.0",
   "description": "公众号排版与发布工作台：17 款调色板主题 + 10 款网页风格 × 4 种排版模板、高级微调与我的方案、公式/Mermaid 转图片、图片封面自动上传、多账号、IP 白名单助手，一键推送到公众号草稿箱。",
   "author": "yingyaoyao88",

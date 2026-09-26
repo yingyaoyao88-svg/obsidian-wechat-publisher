@@ -1,5 +1,5 @@
 // 界面截图调试：npm run harness 后用浏览器打开 test/harness/index.html#<场景>
-// 场景：workbench | format | progress | success | accounts | ip | meta | hidden | math | tune | <主题ID>（如 #paper-orange）
+// 场景：workbench | nocover | issues | format | progress | success | accounts | ip | meta | hidden | math | tune | <主题ID>（如 #paper-orange）
 import "./mock-obsidian";
 import { renderForWechat } from "../../src/render";
 import { WechatPreviewView } from "../../src/workbench";
@@ -39,9 +39,10 @@ const plugin: any = {
     result: await renderForWechat(md, { themeId: settings.themeId, themeColor: settings.themeColor, layout: settings.layout, tune: settings.tune, linkToFootnote: true, resolveImage: async (s: string) => (s.startsWith("data:image/png") ? s : img), rasterize: svgToPng, renderMermaid: renderMermaidSvg }),
     meta: { title: "用 Obsidian 写公众号：从排版到一键发布", author: "张三", digest: "", cover: "", sourceUrl: "" },
   }),
-  resolveCover: () => ({ source: img, label: "正文首图", previewUrl: img }),
+  resolveCover: () => (scene === "nocover" ? { source: null, label: "未设置", previewUrl: null } : { source: img, label: "正文首图", previewUrl: img }),
+  getOverride: () => ({}), setCoverOverride: () => {}, wordCount: async () => 3982,
   openMetaEditor: () => {}, openAccountManager: () => {}, testConnection: async () => {}, openTuneModal: () => {}, applyPreset: async () => {},
-  preflight: () => (scene === "workbench" ? [] : scene === "hidden" ? [] : []),
+  preflight: () => (scene === "nocover" ? ["没有封面：点上方稿件资料选择，或在正文放一张图"] : scene === "issues" ? ["标题 70 字，超过 64 字会被截断"] : []),
   publishDraft: async (_f: any, r: any) => {
     r.start([{ id: "render", label: "排版" }, { id: "images", label: "上传正文图片" }, { id: "cover", label: "封面" }, { id: "draft", label: "写入草稿箱" }]);
     r.update("render", "done"); r.update("images", "done", "5 张"); r.update("cover", "done", "正文首图 · 复用历史封面"); r.update("draft", "run");

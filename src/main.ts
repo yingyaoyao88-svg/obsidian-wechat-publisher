@@ -212,13 +212,27 @@ export default class WechatPublisherPlugin extends Plugin {
       return "";
     };
     return {
-      title: str("title", "标题") || file.basename,
+      title: str("title", "标题") || this.leadingH1(file)?.text || file.basename,
       author: str("author", "作者") || this.activeAccount?.author || "",
       digest: str("digest", "summary", "description", "摘要"),
       // 支持 cover: "[[a.png]]" / "![[a.png]]" / a.png / https://...
       cover: str("cover", "banner", "封面").replace(/^!?\[\[([^|\]]+)(\|[^\]]*)?\]\]$/, "$1"),
       sourceUrl: str("source_url", "original_url", "原文链接"),
     };
+  }
+
+  /**
+   * 笔记开头的一级标题（frontmatter 之后的第一个块）。公众号的文章标题是单独显示的，
+   * 所以这行会作为标题使用，并从正文里去掉，避免标题出现两次。
+   */
+  leadingH1(file: TFile): { text: string; line: number } | null {
+    const cache = this.app.metadataCache.getFileCache(file);
+    const first = cache?.sections?.find((sec) => sec.type !== "yaml");
+    const h = cache?.headings?.[0];
+    if (first?.type === "heading" && h && h.level === 1 && h.position.start.line === first.position.start.line) {
+      return { text: h.heading.trim(), line: h.position.start.line };
+    }
+    return null;
   }
 
   getOverride(file: TFile): PublishOverride {
@@ -257,6 +271,26 @@ export default class WechatPublisherPlugin extends Plugin {
     if (accCover) return { source: accCover, label: "账号默认", previewUrl: preview(accCover) };
     if (images[0]) return { source: images[0], label: "正文首图", previewUrl: preview(images[0]) };
     return { source: null, label: "未设置", previewUrl: null };
+  }
+
+  /** 直接在预览卡片上设置/清除本次发布的封面（不写回笔记） */
+  setCoverOverride(file: TFile, cover: CoverOverride | undefined) {
+    const o = { ...this.getOverride(file), cover };
+    if (!o.title && !o.author && !o.digest && !o.cover) this.overrides.delete(file.path);
+    else this.overrides.set(file.path, o);
+    this.refreshPreviews();
+  }
+
+  /** 正文字数（去掉 Markdown 标记、代码块与 frontmatter，中英文都按字计） */
+  async wordCount(file: TFile): Promise<number> {
+    const text = (await this.app.vault.cachedRead(file))
+      .replace(/^---[\s\S]*?\n---/, "")
+      .replace(/```[\s\S]*?```/g, "")
+      .replace(/!?\[\[[^\]]*\]\]|!\[[^\]]*\]\([^)]*\)/g, "")
+      .replace(/[#>*_`~=\-|[\]()!]/g, "");
+    const cjk = (text.match(/[\u4e00-\u9fff]/g) ?? []).length;
+    const words = (text.replace(/[\u4e00-\u9fff]/g, " ").match(/[A-Za-z0-9]+/g) ?? []).length;
+    return cjk + words;
   }
 
   /** 发布前检查：在点击发布之前就把会失败的问题摆出来 */
@@ -311,7 +345,14 @@ export default class WechatPublisherPlugin extends Plugin {
     mode: RenderMode,
     onImage?: (done: number) => void,
   ): Promise<{ result: RenderResult; meta: ArticleMeta; resolver: ImageResolver }> {
-    const source = await this.app.vault.cachedRead(file);
+    let source = await this.app.vault.cachedRead(file);
+    const h1 = this.leadingH1(file);
+    const fmTitle = this.readMeta(file).title;
+    if (h1 && fmTitle === h1.text) {
+      const lines = source.split("\n");
+      lines.splice(h1.line, 1);
+      source = lines.join("\n");
+    }
     const resolver = this.resolverFor(file, this.activeAccount);
     let done = 0;
     const resolveImage = async (src: string) => {
