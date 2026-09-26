@@ -1,10 +1,17 @@
 /**
- * 主题 = 「CSS 选择器 → 内联样式」的映射。
+ * 主题注册表。两类主题：
+ *
+ *   经典（调色板主题，17 款）：调色板 + 圆角，版式由排版模板决定，生成样式表后按 CSS 层叠规则内联。
+ *   网页风格（装饰主题，10 款）：直接写「选择器 → 内联样式」，并可声明结构装饰（标题前缀、编号、分隔符…）。
  *
  * 公众号编辑器会删除 <style>、class、id，只保留元素上的 style 属性，
- * 所以主题不能写成样式表，只能在渲染时逐个元素“烫”到 style 上。
- * 选择器只在渲染过程中使用（此时 class 还在），最终输出前 class 会被全部删除。
+ * 所以无论哪类主题，最终都会“烫”到每个元素的 style 上，class 在输出前全部删除。
  */
+import { CaptionMode, CodeThemeId, LayoutId, resolveProfile, StyleProfile, Tune } from "./profiles";
+import { PALETTE_THEMES } from "./palette-themes";
+import { buildPaletteCss, resolvePalette } from "./palette-css";
+
+export type { CodeThemeId, LayoutId } from "./profiles";
 
 export interface ThemeOptions {
   /** 主题色，如 #1e80ff */
@@ -36,14 +43,34 @@ export interface ThemeDecor {
 
 export type ThemeGroup = "经典" | "网页风格";
 
-export interface Theme {
+interface ResolvedBase {
   id: string;
   name: string;
-  styles: Record<string, string>;
   decor: ThemeDecor;
+  /** 正文颜色（公式图片需要显式颜色） */
+  textColor: string;
+  /** 正文字号 px（公式按它缩放） */
+  fontSize: number;
+  code: CodeTheme;
+  showMacCodeHeader: boolean;
+  captionMode: CaptionMode;
+  /** typed = 按 callout 类型着色并带图标；quote = 与引用块同款 */
+  callout: "typed" | "quote";
 }
 
-export type CodeThemeId = "one-dark" | "github";
+/** 装饰主题：选择器 → 样式，按声明顺序叠加 */
+export interface DecorTheme extends ResolvedBase {
+  kind: "decor";
+  styles: Record<string, string>;
+}
+
+/** 调色板主题：完整样式表，按特异度/!important 层叠后内联 */
+export interface PaletteThemeResolved extends ResolvedBase {
+  kind: "palette";
+  css: string;
+}
+
+export type Theme = DecorTheme | PaletteThemeResolved;
 
 export interface CodeTheme {
   background: string;
@@ -90,6 +117,7 @@ function base(o: ThemeOptions): Record<string, string> {
     "section.wx-callout": `margin:1.2em 0;padding:10px 14px;border-radius:6px;border-left:4px solid ${o.color};background:${o.color}14;`,
     "section.wx-callout-title": `font-weight:bold;margin-bottom:4px;color:${o.color};font-size:${fs}px;`,
     "section.wx-callout p": `margin:0.4em 0;`,
+    "p span.wx-br-line": `display:block;`,
     // 代码块外框（背景色由代码配色决定，写在元素自身上）
     "section.wx-codeblock": `margin:1.2em 0;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.12);text-align:left;`,
     // 结构装饰的默认样式
@@ -124,189 +152,6 @@ interface ThemeDef {
 const SERIF = "'Songti SC','STSong','Noto Serif SC','Source Han Serif SC',Georgia,serif";
 
 const DEFS: ThemeDef[] = [
-  {
-    id: "default",
-    name: "简约",
-    defaultColor: "#1e80ff",
-    build: (o, s) => ({
-      h1: `margin:1.4em 0 1em;font-size:${s.h1}px;font-weight:bold;color:#222;text-align:center;`,
-      h2: `margin:2em 0 1em;font-size:${s.h2}px;font-weight:bold;color:#222;`,
-      "h2 > span.wx-h": `display:inline-block;border-bottom:2px solid ${o.color};padding-bottom:4px;`,
-      h3: `margin:1.6em 0 0.8em;font-size:${s.h3}px;font-weight:bold;color:#222;`,
-      "h3 > span.wx-h": `border-left:4px solid ${o.color};padding-left:8px;`,
-      "h4, h5, h6": `margin:1.4em 0 0.6em;font-size:${s.h4}px;font-weight:bold;color:#222;`,
-      blockquote: `margin:1.2em 0;padding:10px 16px;background:#f7f7f7;border-left:4px solid #d0d0d0;color:#666;border-radius:2px;`,
-      "blockquote p": `margin:0.4em 0;color:#666;`,
-    }),
-  },
-  {
-    id: "orange",
-    name: "暖橙",
-    defaultColor: "#ff7e33",
-    build: (o, s) => ({
-      h1: `margin:1.4em 0 1em;font-size:${s.h1}px;font-weight:bold;text-align:center;color:#3f3f3f;`,
-      "h1 > span.wx-h": `border-bottom:3px solid ${o.color};padding:0 4px 6px;`,
-      h2: `margin:2em 0 1em;font-size:${s.h2}px;font-weight:bold;text-align:center;`,
-      "h2 > span.wx-h": `display:inline-block;background:${o.color};color:#fff;padding:4px 14px;border-radius:16px;`,
-      h3: `margin:1.6em 0 0.8em;font-size:${s.h3}px;font-weight:bold;color:${o.color};`,
-      "h3 > span.wx-h": `border-left:4px solid ${o.color};padding-left:8px;`,
-      "h4, h5, h6": `margin:1.4em 0 0.6em;font-size:${s.h4}px;font-weight:bold;color:#3f3f3f;`,
-      blockquote: `margin:1.2em 0;padding:12px 16px;background:#fff9f5;border-left:4px solid ${o.color};border-radius:4px;color:#666;`,
-      "blockquote p": `margin:0.4em 0;color:#666;`,
-    }),
-  },
-  {
-    id: "ink",
-    name: "墨黑",
-    defaultColor: "#333333",
-    build: (o, s, b) => ({
-      root: b.root.replace("color:#3f3f3f", "color:#222"),
-      strong: `font-weight:bold;color:#000;`,
-      h1: `margin:1.4em 0 1em;font-size:${s.h1}px;font-weight:bold;color:#000;`,
-      h2: `margin:2em 0 1em;font-size:${s.h2}px;font-weight:bold;color:#000;border-bottom:1px solid #000;padding-bottom:6px;`,
-      h3: `margin:1.6em 0 0.8em;font-size:${s.h3}px;font-weight:bold;color:#000;`,
-      "h3 > span.wx-h": `border-bottom:2px solid ${o.color};padding-bottom:2px;`,
-      "h4, h5, h6": `margin:1.4em 0 0.6em;font-size:${s.h4}px;font-weight:bold;color:#222;`,
-      blockquote: `margin:1.2em 0;padding:4px 16px;border-left:3px solid #000;color:#555;`,
-      "blockquote p": `margin:0.4em 0;color:#555;`,
-    }),
-  },
-  {
-    id: "mint",
-    name: "薄荷绿",
-    defaultColor: "#16a085",
-    build: (o, s) => ({
-      h1: `margin:1.4em 0 1em;font-size:${s.h1}px;font-weight:bold;color:${o.color};text-align:center;`,
-      h2: `margin:2em 0 1em;font-size:${s.h2}px;font-weight:bold;color:#2c3e50;background:${o.color}14;border-left:5px solid ${o.color};padding:8px 12px;border-radius:0 6px 6px 0;`,
-      h3: `margin:1.6em 0 0.8em;font-size:${s.h3}px;font-weight:bold;color:${o.color};`,
-      "h3 > span.wx-h": `border-bottom:2px dotted ${o.color};padding-bottom:2px;`,
-      "h4, h5, h6": `margin:1.4em 0 0.6em;font-size:${s.h4}px;font-weight:bold;color:#2c3e50;`,
-      blockquote: `margin:1.2em 0;padding:12px 16px;background:${o.color}0f;border:1px solid ${o.color}40;border-radius:8px;color:#4a5b5a;`,
-      "blockquote p": `margin:0.4em 0;color:#4a5b5a;`,
-      hr: `border:none;border-top:2px dashed ${o.color}66;margin:2em 0;height:0;`,
-    }),
-  },
-  {
-    id: "tech",
-    name: "科技蓝",
-    defaultColor: "#0066ff",
-    build: (o, s) => ({
-      h1: `margin:1.4em 0 1em;font-size:${s.h1}px;font-weight:bold;color:#fff;text-align:center;background:linear-gradient(135deg, ${o.color}, #00c6ff);padding:14px 10px;border-radius:8px;`,
-      h2: `margin:2em 0 1em;font-size:${s.h2}px;font-weight:bold;`,
-      "h2 > span.wx-h": `display:inline-block;color:#fff;background:linear-gradient(90deg, ${o.color}, #00c6ff);padding:5px 16px 5px 12px;border-radius:0 20px 20px 0;`,
-      h3: `margin:1.6em 0 0.8em;font-size:${s.h3}px;font-weight:bold;color:${o.color};border-bottom:1px dashed ${o.color}80;padding-bottom:6px;`,
-      "h4, h5, h6": `margin:1.4em 0 0.6em;font-size:${s.h4}px;font-weight:bold;color:${o.color};`,
-      blockquote: `margin:1.2em 0;padding:12px 16px;background:#f0f6ff;border-left:4px solid ${o.color};color:#4a5568;border-radius:0 6px 6px 0;`,
-      "blockquote p": `margin:0.4em 0;color:#4a5568;`,
-      "code.wx-inline": `font-family:${MONO};font-size:90%;color:${o.color};background:${o.color}14;padding:2px 5px;border-radius:4px;margin:0 2px;word-break:break-all;`,
-    }),
-  },
-  {
-    id: "purple",
-    name: "优雅紫",
-    defaultColor: "#8e44ad",
-    build: (o, s) => ({
-      h1: `margin:1.4em 0 1em;font-size:${s.h1}px;font-weight:bold;color:${o.color};text-align:center;letter-spacing:0.1em;`,
-      h2: `margin:2.2em 0 1.2em;font-size:${s.h2}px;font-weight:bold;text-align:center;color:${o.color};`,
-      "h2 > span.wx-h": `display:inline-block;border-top:1px solid ${o.color};border-bottom:1px solid ${o.color};padding:6px 18px;letter-spacing:0.12em;`,
-      h3: `margin:1.6em 0 0.8em;font-size:${s.h3}px;font-weight:bold;color:#333;`,
-      "h3 > span.wx-h": `background:linear-gradient(transparent 65%, ${o.color}33 65%);padding:0 2px;`,
-      "h4, h5, h6": `margin:1.4em 0 0.6em;font-size:${s.h4}px;font-weight:bold;color:${o.color};`,
-      strong: `font-weight:bold;color:${o.color};background:${o.color}12;padding:0 2px;border-radius:2px;`,
-      blockquote: `margin:1.4em 0;padding:14px 18px;background:#faf7fc;border-left:3px solid ${o.color};color:#666;font-style:italic;`,
-      "blockquote p": `margin:0.4em 0;color:#666;`,
-    }),
-  },
-  {
-    id: "rose",
-    name: "樱花粉",
-    defaultColor: "#e8638c",
-    build: (o, s) => ({
-      h1: `margin:1.4em 0 1em;font-size:${s.h1}px;font-weight:bold;color:${o.color};text-align:center;`,
-      h2: `margin:2em 0 1em;font-size:${s.h2}px;font-weight:bold;text-align:center;`,
-      "h2 > span.wx-h": `display:inline-block;color:${o.color};background:${o.color}1a;border:1px solid ${o.color}55;padding:5px 18px;border-radius:20px;`,
-      h3: `margin:1.6em 0 0.8em;font-size:${s.h3}px;font-weight:bold;color:${o.color};`,
-      "h3 > span.wx-h": `border-left:4px solid ${o.color};border-radius:2px;padding-left:8px;`,
-      "h4, h5, h6": `margin:1.4em 0 0.6em;font-size:${s.h4}px;font-weight:bold;color:#555;`,
-      blockquote: `margin:1.2em 0;padding:12px 16px;background:#fff5f8;border:1px dashed ${o.color}99;border-radius:10px;color:#7a5a64;`,
-      "blockquote p": `margin:0.4em 0;color:#7a5a64;`,
-      hr: `border:none;border-top:1px dashed ${o.color}99;margin:2em 0;height:0;`,
-    }),
-  },
-  {
-    id: "magazine",
-    name: "杂志",
-    defaultColor: "#c0392b",
-    build: (o, s, b) => ({
-      root: b.root.replace(/font-family:[^;]+;/, `font-family:${SERIF};`) + "text-align:justify;",
-      p: `margin:1.3em 0;font-size:${o.fontSize}px;line-height:1.9;color:#2b2b2b;`,
-      strong: `font-weight:bold;color:#1a1a1a;`,
-      h1: `margin:1.4em 0 1.2em;font-size:${s.h1 + 3}px;font-weight:bold;color:#111;text-align:center;letter-spacing:0.15em;`,
-      h2: `margin:2.4em 0 1.2em;font-size:${s.h2}px;font-weight:bold;color:#111;text-align:center;border-top:3px double #111;border-bottom:1px solid #111;padding:8px 0;letter-spacing:0.1em;`,
-      h3: `margin:1.8em 0 0.8em;font-size:${s.h3}px;font-weight:bold;color:${o.color};letter-spacing:0.05em;`,
-      "h4, h5, h6": `margin:1.4em 0 0.6em;font-size:${s.h4}px;font-weight:bold;color:#333;`,
-      blockquote: `margin:1.6em 0;padding:14px 10px;border-top:1px solid #ccc;border-bottom:1px solid #ccc;color:#555;text-align:center;font-style:italic;`,
-      "blockquote p": `margin:0.4em 0;color:#555;font-size:${o.fontSize + 1}px;`,
-      "figcaption, .wx-caption": `display:block;text-align:center;color:#888;font-size:${o.fontSize - 3}px;margin-top:6px;line-height:1.5;font-style:italic;`,
-    }),
-  },
-  {
-    id: "paper",
-    name: "手账",
-    defaultColor: "#d35400",
-    build: (o, s, b) => ({
-      root: b.root + "background:#fdf8ee;padding:16px 14px;border-radius:6px;",
-      p: `margin:1.2em 0;font-size:${o.fontSize}px;line-height:1.8;color:#4a3f35;`,
-      strong: `font-weight:bold;color:${o.color};`,
-      h1: `margin:1.2em 0 1em;font-size:${s.h1}px;font-weight:bold;color:#4a3f35;text-align:center;`,
-      "h1 > span.wx-h": `border-bottom:2px dashed ${o.color};padding-bottom:4px;`,
-      h2: `margin:2em 0 1em;font-size:${s.h2}px;font-weight:bold;color:#4a3f35;`,
-      "h2 > span.wx-h": `display:inline-block;background:#f7e3c3;border-radius:4px;padding:4px 12px;border-bottom:3px solid ${o.color};`,
-      h3: `margin:1.6em 0 0.8em;font-size:${s.h3}px;font-weight:bold;color:${o.color};`,
-      "h4, h5, h6": `margin:1.4em 0 0.6em;font-size:${s.h4}px;font-weight:bold;color:#4a3f35;`,
-      blockquote: `margin:1.2em 0;padding:12px 16px;background:#fffdf7;border:1px dashed #c9b28f;border-radius:8px;color:#6b5d4f;`,
-      "blockquote p": `margin:0.4em 0;color:#6b5d4f;`,
-      th: `border:1px solid #e0d2b8;padding:6px 10px;background:#f7ecd8;font-weight:bold;text-align:left;`,
-      td: `border:1px solid #e0d2b8;padding:6px 10px;`,
-      hr: `border:none;border-top:2px dotted #c9b28f;margin:2em 0;height:0;`,
-    }),
-  },
-  {
-    id: "minimal",
-    name: "极简",
-    defaultColor: "#555555",
-    build: (o, s) => ({
-      p: `margin:1.4em 0;font-size:${o.fontSize}px;line-height:2;color:#444;`,
-      strong: `font-weight:bold;color:#111;`,
-      a: `color:#111;text-decoration:none;border-bottom:1px solid #999;`,
-      h1: `margin:1.6em 0 1.2em;font-size:${s.h1}px;font-weight:600;color:#111;`,
-      h2: `margin:2.4em 0 1em;font-size:${s.h2}px;font-weight:600;color:#111;`,
-      h3: `margin:2em 0 0.8em;font-size:${s.h3}px;font-weight:600;color:#333;`,
-      "h4, h5, h6": `margin:1.6em 0 0.6em;font-size:${s.h4}px;font-weight:600;color:#555;`,
-      blockquote: `margin:1.4em 0;padding:0 0 0 16px;border-left:2px solid #ddd;color:#777;`,
-      "blockquote p": `margin:0.4em 0;color:#777;`,
-      "sup.wx-fn-ref": `color:${o.color};font-size:75%;line-height:0;vertical-align:super;margin-left:1px;`,
-    }),
-  },
-  {
-    id: "geek",
-    name: "极客",
-    defaultColor: "#00b894",
-    decor: { headingPrefix: { h2: "# ", h3: "## " } },
-    build: (o, s) => ({
-      h1: `margin:1.4em 0 1em;font-size:${s.h1}px;font-weight:bold;color:#2d3436;font-family:${MONO};`,
-      "h1 > span.wx-h": `border-bottom:3px solid ${o.color};padding-bottom:4px;`,
-      h2: `display:table;margin:2em 0 1em;font-size:${s.h2}px;font-weight:bold;font-family:${MONO};background:#2d3436;color:${o.color};padding:4px 12px;border-radius:4px;`,
-      "h2 > span.wx-h-pre": `color:#636e72;`,
-      "h3 > span.wx-h-pre": `color:${o.color};`,
-      h3: `margin:1.6em 0 0.8em;font-size:${s.h3}px;font-weight:bold;color:#2d3436;font-family:${MONO};`,
-      "h4, h5, h6": `margin:1.4em 0 0.6em;font-size:${s.h4}px;font-weight:bold;color:#2d3436;font-family:${MONO};`,
-      strong: `font-weight:bold;color:#2d3436;border-bottom:2px solid ${o.color};`,
-      blockquote: `margin:1.2em 0;padding:10px 16px;background:#f5f6fa;border-left:4px solid #2d3436;color:#555;font-family:${MONO};font-size:${o.fontSize - 1}px;`,
-      "blockquote p": `margin:0.4em 0;color:#555;font-size:${o.fontSize - 1}px;`,
-      "code.wx-inline": `font-family:${MONO};font-size:90%;color:${o.color};background:#2d3436;padding:2px 5px;border-radius:3px;margin:0 2px;word-break:break-all;`,
-    }),
-  },
   // ================================================================ 网页风格
   {
     // Notion：暖灰文字、几乎无装饰、红色行内代码、浅灰表头
@@ -593,22 +438,24 @@ const DEFS: ThemeDef[] = [
   },
 ];
 
-export function buildTheme(id: string, o: ThemeOptions): Theme {
-  const def = DEFS.find((d) => d.id === id) ?? DEFS[0];
-  const b = base(o);
-  return {
-    id: def.id,
-    name: def.name,
-    styles: { ...b, ...def.build(o, headingSizes(o.fontSize), b) },
-    decor: def.decor ?? {},
-  };
-}
-
-export const THEMES: { id: string; name: string; defaultColor: string; group: ThemeGroup }[] = DEFS.map(
-  ({ id, name, defaultColor, group }) => ({ id, name, defaultColor, group: group ?? "经典" }),
-);
-
 export const CODE_THEMES: Record<CodeThemeId, CodeTheme> = {
+  // 配色取自 RanceLee233/wechat-publisher 的 GitHub Dark 高亮（MIT）
+  "github-dark": {
+    background: "#0d1117",
+    color: "#e6edf3",
+    headerBackground: "rgba(255,255,255,0.06)",
+    palette: {
+      comment: "#8b949e", quote: "#8b949e",
+      variable: "#ff7b72", "template-variable": "#ff7b72", tag: "#ff7b72", name: "#ff7b72",
+      "selector-id": "#ff7b72", "selector-class": "#ff7b72", regexp: "#ff7b72", deletion: "#ff7b72",
+      number: "#79c0ff", "built_in": "#79c0ff", literal: "#79c0ff", type: "#79c0ff", params: "#79c0ff",
+      meta: "#79c0ff", link: "#79c0ff", attribute: "#d2a8ff", attr: "#79c0ff",
+      string: "#a5d6ff", symbol: "#a5d6ff", bullet: "#a5d6ff", addition: "#a5d6ff",
+      title: "#d2a8ff", "title.function": "#d2a8ff", "title.class": "#d2a8ff", section: "#d2a8ff",
+      keyword: "#ff7b72", "selector-tag": "#ff7b72", property: "#79c0ff", operator: "#ff7b72",
+      "variable.language": "#79c0ff", subst: "#e6edf3",
+    },
+  },
   "one-dark": {
     background: "#282c34",
     color: "#abb2bf",
@@ -641,19 +488,125 @@ export const CODE_THEMES: Record<CodeThemeId, CodeTheme> = {
   },
 };
 
-// ---------------------------------------------------------------- 排版模板
 
-export type LayoutId = "balanced" | "compact" | "relaxed" | "column";
+// ---------------------------------------------------------------- 注册表
 
-/** 排版模板只调“节奏”（行距、段距、对齐、缩进、留白），与主题正交，任何主题都能叠加 */
-export const LAYOUTS: { id: LayoutId; name: string; desc: string }[] = [
-  { id: "balanced", name: "均衡", desc: "主题默认的行距与段距" },
-  { id: "compact", name: "紧凑", desc: "行距、段距更小，适合长文和清单" },
-  { id: "relaxed", name: "舒展", desc: "更大的行距和段距，阅读更松弛" },
-  { id: "column", name: "专栏", desc: "两端对齐、首行缩进、左右留白" },
+export const THEMES: {
+  id: string;
+  name: string;
+  defaultColor: string;
+  group: ThemeGroup;
+  desc?: string;
+  /** 主题卡片上的色块：主色 / 浅主色 / 页面底色 */
+  swatch?: [string, string, string];
+}[] = [
+  ...PALETTE_THEMES.map((t) => ({
+    id: t.id,
+    name: t.name,
+    defaultColor: t.palette.primary,
+    group: "经典" as ThemeGroup,
+    desc: t.description,
+    swatch: [t.palette.primary, t.palette.primarySoft, t.palette.background] as [string, string, string],
+  })),
+  ...DEFS.map(({ id, name, defaultColor }) => ({ id, name, defaultColor, group: "网页风格" as ThemeGroup })),
 ];
 
-export function applyLayout(styles: Record<string, string>, layout: LayoutId): Record<string, string> {
+/** 0.2.x 及更早的“经典”主题已被调色板主题取代，旧 ID 映射到风格最接近的新主题 */
+const LEGACY_THEME_IDS: Record<string, string> = {
+  default: "classic",
+  orange: "sunrise",
+  ink: "graphite",
+  tech: "techno",
+  purple: "electric-violet",
+  rose: "maple",
+  magazine: "newspaper",
+  paper: "paper-orange",
+  geek: "neon-terminal",
+};
+
+export function normalizeThemeId(id: string): string {
+  if (THEMES.some((t) => t.id === id)) return id;
+  return LEGACY_THEME_IDS[id] ?? "classic";
+}
+
+export function themeDefaultColor(id: string): string {
+  return THEMES.find((t) => t.id === normalizeThemeId(id))?.defaultColor ?? "#0F4C81";
+}
+
+export interface ThemeRequest {
+  themeId: string;
+  /** 主题色；与主题默认色相同时视为未自定义 */
+  themeColor?: string;
+  layout?: LayoutId;
+  tune?: Tune;
+}
+
+function isDark(color: string): boolean {
+  const m = color.match(/^#([0-9a-f]{6})$/i);
+  if (!m) return true;
+  const n = parseInt(m[1], 16);
+  const lum = 0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255);
+  return lum < 128;
+}
+
+export function resolveTheme(req: ThemeRequest): Theme {
+  const id = normalizeThemeId(req.themeId);
+  const tune = req.tune ?? {};
+  const palette = PALETTE_THEMES.find((t) => t.id === id);
+
+  if (palette) {
+    const custom = req.themeColor && req.themeColor.toLowerCase() !== palette.palette.primary.toLowerCase();
+    const profile: StyleProfile = resolveProfile(req.layout, {
+      ...tune,
+      customPrimaryColor: tune.customPrimaryColor || (custom ? req.themeColor : undefined),
+    });
+    const colors = resolvePalette(palette, profile);
+    const codeId = profile.codeTheme;
+    // 深色代码配色用主题自带的代码底色；浅色配色（GitHub）配浅底，避免深底浅字色看不清
+    const code: CodeTheme = isDark(CODE_THEMES[codeId].background)
+      ? { ...CODE_THEMES[codeId], background: colors.codeBackground, color: colors.codeText, headerBackground: "rgba(255,255,255,0.06)" }
+      : CODE_THEMES[codeId];
+    return {
+      kind: "palette",
+      id,
+      name: palette.name,
+      css: buildPaletteCss(palette, profile),
+      decor: {},
+      textColor: colors.text,
+      fontSize: profile.fontSize,
+      code,
+      showMacCodeHeader: profile.showMacCodeHeader,
+      captionMode: profile.figureCaptionMode,
+      callout: "quote",
+    };
+  }
+
+  const def = DEFS.find((d) => d.id === id) ?? DEFS[0];
+  const fontSize = tune.fontSize ?? resolveProfile(req.layout).fontSize;
+  const o: ThemeOptions = { color: req.themeColor || def.defaultColor, fontSize };
+  const b = base(o);
+  let styles = { ...b, ...def.build(o, headingSizes(fontSize), b) };
+  styles = applyRhythm(styles, req.layout ?? "balanced", tune);
+  return {
+    kind: "decor",
+    id: def.id,
+    name: def.name,
+    styles,
+    decor: def.decor ?? {},
+    textColor: styles.root.match(/(?:^|;)color:(#[0-9a-fA-F]{3,8})/)?.[1] ?? "#333333",
+    fontSize,
+    code: CODE_THEMES[tune.codeTheme ?? "one-dark"],
+    showMacCodeHeader: tune.showMacCodeHeader ?? true,
+    captionMode: tune.figureCaptionMode ?? "alt-first",
+    callout: "typed",
+  };
+}
+
+/**
+ * 装饰主题有自己的字号与间距设计，排版模板只调“节奏”：
+ * 行距、段距、对齐、首行缩进、左右留白；高级微调里显式设置的值再覆盖在上面。
+ */
+function applyRhythm(styles: Record<string, string>, layout: LayoutId, tune: Tune): Record<string, string> {
   const out = { ...styles };
   const append = (key: string, css: string) => (out[key] = (out[key] ?? "") + css);
   switch (layout) {
@@ -668,16 +621,19 @@ export function applyLayout(styles: Record<string, string>, layout: LayoutId): R
     case "column":
       append("root", "padding-left:12px;padding-right:12px;");
       append("p", "text-align:justify;text-indent:2em;line-height:1.9;");
-      // 引用、图注、脚注等里的段落不缩进
-      append("blockquote p", "text-indent:0;");
-      append("section.wx-callout p", "text-indent:0;");
-      append("section.wx-footnotes p", "text-indent:0;");
       break;
   }
+  if (tune.lineHeight) {
+    append("p", `line-height:${tune.lineHeight};`);
+    append("li", `line-height:${tune.lineHeight};`);
+  }
+  if (tune.textAlign) append("p", `text-align:${tune.textAlign};`);
+  if (tune.paragraphIndent !== undefined) append("p", `text-indent:${tune.paragraphIndent ? "2em" : "0"};`);
+  if (tune.contentSideIndent) append("root", `padding-left:${tune.contentSideIndent};padding-right:${tune.contentSideIndent};`);
+  if (tune.customPageBackgroundColor) append("root", `background:${tune.customPageBackgroundColor};`);
+  // 引用、图注、脚注里的段落不缩进
+  append("blockquote p", "text-indent:0;");
+  append("section.wx-callout p", "text-indent:0;");
+  append("section.wx-footnotes p", "text-indent:0;");
   return out;
-}
-
-/** 从主题根样式里取正文颜色（公式图片需要显式颜色） */
-export function themeTextColor(theme: Theme): string {
-  return theme.styles.root.match(/(?:^|;)color:(#[0-9a-fA-F]{3,8})/)?.[1] ?? "#333333";
 }

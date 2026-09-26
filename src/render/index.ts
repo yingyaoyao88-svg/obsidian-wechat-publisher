@@ -1,26 +1,28 @@
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js/lib/common";
 import { preprocessObsidian } from "./preprocess";
-import { applyLayout, buildTheme, CODE_THEMES, CodeThemeId, LayoutId, MONO, ThemeDecor, themeTextColor } from "./theme";
+import { LayoutId, MONO, resolveTheme, Theme, ThemeDecor } from "./theme";
+import type { Tune } from "./profiles";
 import { texToSvg } from "./math";
+import { inlineCss } from "./inline-css";
 
-export { THEMES, CODE_THEMES, LAYOUTS } from "./theme";
-export type { LayoutId } from "./theme";
+export { THEMES, CODE_THEMES, normalizeThemeId, themeDefaultColor } from "./theme";
+export { PROFILES, TUNE_OPTIONS, resolveProfile } from "./profiles";
+export type { LayoutId, Tune, StyleProfile } from "./profiles";
 export { stripFrontmatter } from "./preprocess";
 
 export interface RenderOptions {
   themeId: string;
-  themeColor: string;
-  fontSize: number;
+  /** 主题色；与主题默认色相同时视为未自定义 */
+  themeColor?: string;
   /** 排版模板：均衡 / 紧凑 / 舒展 / 专栏 */
   layout?: LayoutId;
-  codeTheme: CodeThemeId;
-  /** 代码块顶部显示 macOS 风格的红黄绿三个圆点 */
-  macCodeBlock: boolean;
+  /** 高级微调：覆盖排版模板里的任意字段（字号、标题款式、代码配色、图注…） */
+  tune?: Tune;
   /** 外链转成文末脚注（未认证公众号正文里不能放外链） */
   linkToFootnote: boolean;
-  /** 图片下方显示 alt 文字作为图注 */
-  imageCaption: boolean;
+  /** 单个换行渲染为换行（与 Obsidian 默认一致；开启“严格换行”时传 false） */
+  breaks?: boolean;
   /**
    * 把 Markdown 里写的图片地址（相对路径 / 双链文件名 / http 链接）换成最终地址：
    * 预览时是 Obsidian 本地资源地址，发布时是上传到微信后的 mmbiz.qpic.cn 地址。
@@ -44,6 +46,13 @@ export interface RenderResult {
   warnings: string[];
 }
 
+const CALLOUT_LABELS: Record<string, string> = {
+  abstract: "摘要", summary: "摘要", attention: "注意", bug: "问题", caution: "提醒", check: "检查", danger: "警告",
+  error: "错误", example: "示例", fail: "失败", failure: "失败", faq: "问答", help: "帮助", hint: "提示",
+  important: "重点", info: "说明", note: "笔记", question: "问题", quote: "引用", cite: "引用", success: "完成",
+  done: "完成", tip: "技巧", todo: "待办", warning: "警示", missing: "缺失",
+};
+
 const CALLOUT_COLORS: Record<string, [string, string]> = {
   note: ["#448aff", "ℹ️"], info: ["#448aff", "ℹ️"], abstract: ["#00b0ff", "📋"], summary: ["#00b0ff", "📋"],
   tip: ["#00bfa5", "💡"], hint: ["#00bfa5", "💡"], important: ["#00bfa5", "🔥"], success: ["#00c853", "✅"],
@@ -54,11 +63,11 @@ const CALLOUT_COLORS: Record<string, [string, string]> = {
   cite: ["#9e9e9e", "💬"], todo: ["#448aff", "☑️"],
 };
 
-function createMarkdown(): InstanceType<typeof MarkdownIt> {
+function createMarkdown(breaks: boolean): InstanceType<typeof MarkdownIt> {
   const md: InstanceType<typeof MarkdownIt> = new MarkdownIt({
     html: true,
     linkify: true,
-    breaks: false,
+    breaks,
     typographer: false,
     highlight(code: string, lang: string): string {
       const language = (lang || "").trim().split(/\s+/)[0].toLowerCase();
@@ -77,7 +86,7 @@ function createMarkdown(): InstanceType<typeof MarkdownIt> {
   return md;
 }
 
-const markdown = createMarkdown();
+const markdowns = { soft: createMarkdown(true), strict: createMarkdown(false) };
 
 // ---------------------------------------------------------------- 代码块
 
@@ -129,8 +138,8 @@ function macDots(): string {
   );
 }
 
-function transformCodeBlocks(root: Element, doc: Document, opts: RenderOptions) {
-  const ct = CODE_THEMES[opts.codeTheme] ?? CODE_THEMES["one-dark"];
+function transformCodeBlocks(root: Element, doc: Document, theme: Theme) {
+  const ct = theme.code;
   root.querySelectorAll("pre.wx-pre").forEach((pre) => {
     const code = pre.querySelector("code")!;
     code.querySelectorAll("span").forEach((span) => {
@@ -145,19 +154,19 @@ function transformCodeBlocks(root: Element, doc: Document, opts: RenderOptions) 
     const wrapper = doc.createElement("section");
     wrapper.className = "wx-codeblock"; // 外框圆角/阴影/边框由主题决定
     wrapper.setAttribute("style", `background:${ct.background};`);
-    if (opts.macCodeBlock) {
+    if (theme.showMacCodeHeader) {
       const header = doc.createElement("section");
-      header.setAttribute("style", `padding:10px 12px 0;background:${ct.background};line-height:1;`);
+      header.setAttribute("style", `padding:8px 12px;background:${ct.headerBackground};line-height:1;`);
       header.innerHTML = macDots();
       wrapper.appendChild(header);
     }
     pre.setAttribute(
       "style",
-      `margin:0;padding:12px 16px 14px;background:${ct.background};overflow-x:auto;border-radius:0;`,
+      `margin:0;padding:12px 16px 14px;background:${ct.background};overflow-x:auto;border-radius:0;text-indent:0;`,
     );
     code.setAttribute(
       "style",
-      `display:block;white-space:nowrap;font-family:${MONO};font-size:13px;line-height:1.7;` +
+      `display:block;white-space:nowrap;font-family:${MONO};font-size:${theme.kind === "palette" ? 14 : 13}px;line-height:1.65;text-indent:0;` +
         `color:${ct.color};background:transparent;letter-spacing:0;padding:0;margin:0;word-break:normal;`,
     );
     pre.parentNode!.replaceChild(wrapper, pre);
@@ -171,9 +180,10 @@ function svgDataUri(svg: string): string {
   return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
 }
 
-async function transformMath(root: Element, doc: Document, opts: RenderOptions, color: string, warnings: string[]) {
+async function transformMath(root: Element, doc: Document, opts: RenderOptions, theme: Theme, warnings: string[]) {
   const rasterize = opts.rasterize ?? (async (svg: string) => svgDataUri(svg));
-  const exPx = opts.fontSize / 2; // MathJax 约定 1ex ≈ 0.5em
+  const color = theme.textColor;
+  const exPx = theme.fontSize / 2; // MathJax 约定 1ex ≈ 0.5em
   const nodes = Array.from(root.querySelectorAll("span.wx-math, section.wx-math-block"));
   for (const node of nodes) {
     const display = node.tagName === "SECTION";
@@ -261,7 +271,7 @@ async function transformMermaid(root: Element, doc: Document, opts: RenderOption
 
 // ---------------------------------------------------------------- 图片
 
-async function transformImages(root: Element, doc: Document, opts: RenderOptions, warnings: string[]) {
+async function transformImages(root: Element, doc: Document, opts: RenderOptions, theme: Theme, warnings: string[]) {
   const imgs = Array.from(root.querySelectorAll("img"));
   const resolved = new Map<string, string>();
   for (const img of imgs) {
@@ -305,11 +315,11 @@ async function transformImages(root: Element, doc: Document, opts: RenderOptions
       const block = doc.createElement("section");
       block.className = "wx-img";
       block.appendChild(img);
-      const alt = (img as Element).getAttribute("alt") ?? "";
-      if (opts.imageCaption && alt && !/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(alt)) {
+      const caption = pickCaption(img as Element, theme.captionMode);
+      if (caption) {
         const cap = doc.createElement("section");
         cap.className = "wx-caption";
-        cap.textContent = alt;
+        cap.textContent = caption;
         block.appendChild(cap);
       }
       frag.appendChild(block);
@@ -320,6 +330,23 @@ async function transformImages(root: Element, doc: Document, opts: RenderOptions
     if (img.classList.contains("wx-math-img")) return;
     if (!img.parentElement?.classList.contains("wx-img")) img.classList.add("wx-inline-img");
   });
+}
+
+/** 图注来源：none / 仅 alt / alt 优先 / title 优先（![alt](a.png "title")）；文件名式的 alt 不算图注 */
+function pickCaption(img: Element, mode: Theme["captionMode"]): string {
+  let alt = (img.getAttribute("alt") ?? "").trim();
+  if (/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(alt)) alt = "";
+  const title = (img.getAttribute("title") ?? "").trim();
+  switch (mode) {
+    case "none":
+      return "";
+    case "alt-only":
+      return alt;
+    case "title-first":
+      return title || alt;
+    default:
+      return alt || title;
+  }
 }
 
 // ---------------------------------------------------------------- 链接 → 脚注
@@ -377,7 +404,7 @@ function transformLinks(root: Element, doc: Document, opts: RenderOptions) {
 
 // ---------------------------------------------------------------- Callout
 
-function transformCallouts(root: Element, doc: Document) {
+function transformCallouts(root: Element, doc: Document, mode: Theme["callout"]) {
   root.querySelectorAll("blockquote").forEach((bq) => {
     const first = bq.firstElementChild;
     if (!first || first.tagName !== "P") return;
@@ -385,13 +412,21 @@ function transformCallouts(root: Element, doc: Document) {
     if (!m) return;
     const type = m[1].toLowerCase();
     const [color, icon] = CALLOUT_COLORS[type] ?? CALLOUT_COLORS.note;
-    const section = doc.createElement("section");
+    const label = m[2].trim() || CALLOUT_LABELS[type] || type.toUpperCase();
+    // 调色板主题：callout 就是一个引用块（所有引用规则、主题覆盖都作用于它）；装饰主题：独立的彩色提示框
+    const section = doc.createElement(mode === "quote" ? "blockquote" : "section");
     section.className = "wx-callout";
-    section.setAttribute("style", `border-left-color:${color};background:${color}14;`);
     const title = doc.createElement("section");
     title.className = "wx-callout-title";
-    title.setAttribute("style", `color:${color};`);
-    title.innerHTML = `${icon} ${m[2].trim() || type.charAt(0).toUpperCase() + type.slice(1)}`;
+    if (mode === "typed") {
+      // 装饰主题：按类型着色 + 图标
+      section.setAttribute("style", `border-left-color:${color};background:${color}14;`);
+      title.setAttribute("style", `color:${color};`);
+      title.innerHTML = `${icon} ${label}`;
+    } else {
+      // 调色板主题：与引用块同款，标题用主色
+      title.innerHTML = label;
+    }
     section.appendChild(title);
 
     first.innerHTML = first.innerHTML.slice(m[0].length);
@@ -414,6 +449,28 @@ function transformMisc(root: Element, doc: Document) {
   // 行内代码
   root.querySelectorAll("code").forEach((c) => {
     if (!c.classList.contains("wx-code")) c.classList.add("wx-inline");
+  });
+  // 段落内的软换行：后续每一行变成块级 span，这样首行缩进（text-indent 会继承）对每一行都生效
+  root.querySelectorAll("p").forEach((p) => {
+    if (!p.querySelector(":scope > br")) return;
+    const lines: ChildNode[][] = [[]];
+    Array.from(p.childNodes).forEach((n) => {
+      if (n.nodeName === "BR") lines.push([]);
+      else lines[lines.length - 1].push(n);
+    });
+    if (lines.length < 2) return;
+    p.innerHTML = "";
+    lines.forEach((nodes, i) => {
+      // 去掉 markdown-it 在 <br> 后留下的换行符
+      if (nodes[0]?.nodeType === 3) nodes[0].nodeValue = (nodes[0].nodeValue ?? "").replace(/^\n/, "");
+      if (i === 0) nodes.forEach((n) => p.appendChild(n));
+      else {
+        const line = doc.createElement("span");
+        line.className = "wx-br-line";
+        nodes.forEach((n) => line.appendChild(n));
+        p.appendChild(line);
+      }
+    });
   });
   // 表格外包一层可横向滚动的容器
   root.querySelectorAll("table").forEach((t) => {
@@ -520,7 +577,8 @@ function cleanAttributes(root: Element) {
 
 export async function renderForWechat(source: string, opts: RenderOptions): Promise<RenderResult> {
   const warnings: string[] = [];
-  const bodyHtml = markdown.render(preprocessObsidian(source));
+  const md = opts.breaks === false ? markdowns.strict : markdowns.soft;
+  const bodyHtml = md.render(preprocessObsidian(source));
 
   const parse = opts.parseHTML ?? ((h: string) => new DOMParser().parseFromString(h, "text/html"));
   const doc = parse(`<!DOCTYPE html><html><body><section id="wx-root">${bodyHtml}</section></body></html>`);
@@ -532,18 +590,23 @@ export async function renderForWechat(source: string, opts: RenderOptions): Prom
     if (src && !images.includes(src)) images.push(src);
   });
 
-  const theme = buildTheme(opts.themeId, { color: opts.themeColor, fontSize: opts.fontSize });
+  const theme = resolveTheme({ themeId: opts.themeId, themeColor: opts.themeColor, layout: opts.layout, tune: opts.tune });
 
-  transformCallouts(root, doc);
-  await transformMath(root, doc, opts, themeTextColor(theme), warnings);
+  transformCallouts(root, doc, theme.callout);
+  await transformMath(root, doc, opts, theme, warnings);
   await transformMermaid(root, doc, opts, warnings);
-  transformCodeBlocks(root, doc, opts);
-  await transformImages(root, doc, opts, warnings);
+  transformCodeBlocks(root, doc, theme);
+  await transformImages(root, doc, opts, theme, warnings);
   transformLinks(root, doc, opts);
   transformMisc(root, doc);
 
   applyDecor(root, doc, theme.decor);
-  applyTheme(root, applyLayout(theme.styles, opts.layout ?? "balanced"));
+  if (theme.kind === "palette") {
+    root.classList.add("wxp-root");
+    inlineCss(root, theme.css);
+  } else {
+    applyTheme(root, theme.styles);
+  }
   cleanAttributes(root);
 
   return { html: root.outerHTML, images, warnings };

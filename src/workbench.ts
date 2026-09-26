@@ -3,8 +3,8 @@ import type { EditorView } from "@codemirror/view";
 import type WechatPublisherPlugin from "./main";
 import type { Reporter, StepId, StepState } from "./main";
 import { HELP_URL, MP_HOME } from "./links";
-import { LAYOUTS, THEMES } from "./render";
-import type { LayoutId } from "./render/theme";
+import { PROFILES, resolveProfile, THEMES } from "./render";
+import type { LayoutId } from "./render";
 
 export const VIEW_TYPE_WECHAT_PREVIEW = "wechat-mp-publisher-preview";
 
@@ -246,14 +246,32 @@ export class WechatPreviewView extends ItemView {
       if (this.formatPanel) this.formatPanel.scrollTop = keep;
     };
 
+    // 我的方案（有才显示）
+    if (s.presets.length) {
+      panel.createDiv({ cls: "wxp-section-title", text: "我的方案" });
+      const chips = panel.createDiv({ cls: "wxp-chips" });
+      s.presets.forEach((p) => {
+        const active = p.themeId === s.themeId && p.layout === s.layout && JSON.stringify(p.tune) === JSON.stringify(s.tune);
+        const chip = chips.createEl("button", { text: p.name, cls: active ? "is-active" : "" });
+        chip.onclick = async () => {
+          await this.plugin.applyPreset(p);
+          this.openFormatPanel();
+        };
+      });
+    }
+
     // 主题网格
     for (const group of [...new Set(THEMES.map((t) => t.group))]) {
       panel.createDiv({ cls: "wxp-section-title", text: `主题 · ${group}` });
       const grid = panel.createDiv({ cls: "wxp-theme-grid" });
       THEMES.filter((t) => t.group === group).forEach((t) => {
         const card = grid.createDiv({ cls: "wxp-theme-card" + (t.id === s.themeId ? " is-active" : "") });
+        if (t.desc) card.title = t.desc;
         const sw = card.createDiv({ cls: "wxp-swatch" });
-        sw.style.setProperty("--wxp-swatch", t.defaultColor);
+        const [main, soft, bg] = t.swatch ?? [t.defaultColor, `color-mix(in srgb, ${t.defaultColor} 18%, #fff)`, "#fff"];
+        sw.style.setProperty("--wxp-swatch", main);
+        sw.style.setProperty("--wxp-swatch-soft", soft);
+        sw.style.setProperty("--wxp-swatch-bg", bg);
         card.createDiv({ cls: "wxp-theme-name", text: t.name });
         card.onclick = () =>
           apply(() => {
@@ -266,7 +284,7 @@ export class WechatPreviewView extends ItemView {
     // 排版模板
     panel.createDiv({ cls: "wxp-section-title", text: "排版模板" });
     const seg = panel.createDiv({ cls: "wxp-segment" });
-    LAYOUTS.forEach((l) => {
+    PROFILES.forEach((l) => {
       const b = seg.createEl("button", { text: l.name, cls: l.id === s.layout ? "is-active" : "" });
       b.title = l.desc;
       b.onclick = () => apply(() => (s.layout = l.id as LayoutId));
@@ -281,31 +299,19 @@ export class WechatPreviewView extends ItemView {
     color.value = s.themeColor;
     color.onchange = () => apply(() => (s.themeColor = color.value));
 
+    const fontSize = resolveProfile(s.layout, s.tune).fontSize;
     const fsWrap = row.createDiv({ cls: "wxp-tune" });
     fsWrap.createSpan({ text: "字号" });
     const minus = fsWrap.createEl("button", { text: "−" });
-    fsWrap.createSpan({ cls: "wxp-fs", text: `${s.fontSize}` });
+    fsWrap.createSpan({ cls: "wxp-fs", text: `${fontSize}` });
     const plus = fsWrap.createEl("button", { text: "+" });
-    minus.onclick = () => s.fontSize > 13 && apply(() => s.fontSize--);
-    plus.onclick = () => s.fontSize < 18 && apply(() => s.fontSize++);
+    minus.onclick = () => fontSize > 13 && apply(() => (s.tune = { ...s.tune, fontSize: fontSize - 0.5 }));
+    plus.onclick = () => fontSize < 20 && apply(() => (s.tune = { ...s.tune, fontSize: fontSize + 0.5 }));
 
-    const codeWrap = row.createDiv({ cls: "wxp-tune" });
-    codeWrap.createSpan({ text: "代码" });
-    const codeSeg = codeWrap.createDiv({ cls: "wxp-segment is-small" });
-    (
-      [
-        ["one-dark", "深色"],
-        ["github", "浅色"],
-      ] as const
-    ).forEach(([id, name]) => {
-      const b = codeSeg.createEl("button", { text: name, cls: s.codeTheme === id ? "is-active" : "" });
-      b.onclick = () => apply(() => (s.codeTheme = id));
-    });
-
-    const more = panel.createDiv({ cls: "wxp-panel-footer" });
-    more.createEl("a", { text: "更多设置（外链脚注、图注、Mac 圆点…）" }).onclick = () => {
+    const tuneBtn = row.createEl("button", { text: "高级微调 / 我的方案…", cls: "wxp-tune-open" });
+    tuneBtn.onclick = () => {
       this.closeFormatPanel();
-      this.openSettings();
+      this.plugin.openTuneModal();
     };
   }
 
@@ -322,6 +328,7 @@ export class WechatPreviewView extends ItemView {
         el.empty();
         el.addClass("is-visible");
         el.removeClass("is-error", "is-done");
+        el.querySelector(".wxp-progress-actions")?.remove();
         const list = el.createDiv({ cls: "wxp-steps-list" });
         steps.forEach((s) => {
           const r = list.createDiv({ cls: "wxp-step is-wait" });
@@ -341,7 +348,7 @@ export class WechatPreviewView extends ItemView {
         setIcon(icon, icons[state]);
         if (detail !== undefined) (r.querySelector(".wxp-step-detail") as HTMLElement).setText(detail);
       },
-      finish: (ok, message) => {
+      finish: (ok, message, actions) => {
         el.addClass(ok ? "is-done" : "is-error");
         const msg = el.querySelector(".wxp-progress-msg") as HTMLElement;
         msg.empty();
@@ -349,7 +356,15 @@ export class WechatPreviewView extends ItemView {
         const close = msg.createEl("button", { cls: "clickable-icon wxp-progress-close", attr: { "aria-label": "关闭" } });
         setIcon(close, "x");
         close.onclick = () => el.removeClass("is-visible");
-        if (ok) hideTimer = window.setTimeout(() => el.removeClass("is-visible"), 8000);
+        if (actions?.length) {
+          const row = el.createDiv({ cls: "wxp-progress-actions" });
+          actions.forEach((a) => {
+            const b = row.createEl("button", { text: a.label, cls: a.cta ? "mod-cta" : "" });
+            b.onclick = a.onClick;
+          });
+        } else if (ok) {
+          hideTimer = window.setTimeout(() => el.removeClass("is-visible"), 8000);
+        }
       },
     };
   }
@@ -395,6 +410,11 @@ export class WechatPreviewView extends ItemView {
       `${result.images.length} 张图 · 约 ${publishHtml.length} 字符 · ${(size / 1024).toFixed(0)} KB${warn}` +
         (result.warnings.length ? ` · ${result.warnings.join("；")}` : ""),
     );
+    const issues = this.plugin.preflight(file, result);
+    if (issues.length) {
+      const list = this.statusEl.createDiv({ cls: "wxp-preflight" });
+      issues.forEach((i) => list.createDiv({ text: `⚠️ ${i}` }));
+    }
     this.statusEl.toggleClass("is-warning", !!warn || result.warnings.length > 0);
     this.attachScrollSync();
   }

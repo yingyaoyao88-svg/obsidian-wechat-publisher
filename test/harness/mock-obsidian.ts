@@ -83,6 +83,16 @@ export class Setting {
   addTextArea(cb: any) { cb(comp(this.ctl.createEl("textarea"))); return this; }
   addToggle(cb: any) { const t = this.ctl.createDiv({ cls: "checkbox-container" }); cb(comp(t)); return this; }
   addButton(cb: any) { cb(comp(this.ctl.createEl("button"))); return this; }
+  addExtraButton(cb: any) { const b = this.ctl.createEl("button", { text: "↺" }); const c = comp(b); c.setIcon = () => c; c.setTooltip = () => c; cb(c); return this; }
+  addSlider(cb: any) { const i = this.ctl.createEl("input", { type: "range" }); cb(comp(i)); return this; }
+  addColorPicker(cb: any) { const i = this.ctl.createEl("input", { type: "color" }); cb(comp(i)); return this; }
+  addDropdown(cb: any) {
+    const sel = this.ctl.createEl("select");
+    const c = comp(sel);
+    c.addOption = (v: string, l: string) => { sel.createEl("option", { value: v, text: l }); return c; };
+    cb(c);
+    return this;
+  }
 }
 export class PluginSettingTab {}
 export class Plugin {}

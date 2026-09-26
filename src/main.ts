@@ -1,6 +1,7 @@
 import { MarkdownView, Notice, Plugin, TFile } from "obsidian";
 import { renderForWechat, RenderResult } from "./render";
-import { migrateSettings, WechatAccount, WechatSettings, WechatSettingTab } from "./settings";
+import { migrateSettings, StylePreset, WechatAccount, WechatSettings, WechatSettingTab } from "./settings";
+import { TuneModal } from "./tune";
 import { WechatClient, WechatApiError, DraftArticle } from "./wechat/api";
 import { ImageResolver, LoadedImage } from "./wechat/images";
 import { VIEW_TYPE_WECHAT_PREVIEW, WechatPreviewView } from "./workbench";
@@ -32,10 +33,17 @@ export type StepId = "render" | "images" | "cover" | "draft" | "copy";
 export type StepState = "wait" | "run" | "done" | "error";
 
 /** 发布进度的展示方：预览面板里是步骤列表，命令行触发时是 Notice */
+export interface ReporterAction {
+  label: string;
+  cta?: boolean;
+  onClick: () => void;
+}
+
 export interface Reporter {
   start(steps: { id: StepId; label: string }[]): void;
   update(id: StepId, state: StepState, detail?: string): void;
-  finish(ok: boolean, message: string): void;
+  /** actions：完成后给出的下一步按钮（如“去公众号发表”） */
+  finish(ok: boolean, message: string, actions?: ReporterAction[]): void;
 }
 
 class NoticeReporter implements Reporter {
@@ -121,6 +129,20 @@ export default class WechatPublisherPlugin extends Plugin {
 
   private clientFor(acc: WechatAccount | undefined): WechatClient {
     return new WechatClient(acc?.appId ?? "", acc?.appSecret ?? "");
+  }
+
+  openTuneModal() {
+    new TuneModal(this.app, this).open();
+  }
+
+  async applyPreset(p: StylePreset) {
+    this.settings.themeId = p.themeId;
+    this.settings.themeColor = p.themeColor;
+    this.settings.layout = p.layout;
+    this.settings.tune = { ...p.tune };
+    await this.saveSettings();
+    this.refreshPreviews();
+    new Notice(`已套用方案「${p.name}」`);
   }
 
   openAccountManager(onClose?: () => void) {
@@ -237,6 +259,18 @@ export default class WechatPublisherPlugin extends Plugin {
     return { source: null, label: "未设置", previewUrl: null };
   }
 
+  /** 发布前检查：在点击发布之前就把会失败的问题摆出来 */
+  preflight(file: TFile, result: RenderResult): string[] {
+    const issues: string[] = [];
+    const acc = this.activeAccount;
+    if (!acc || !acc.appId || !acc.appSecret) issues.push("未配置公众号账号（发布草稿需要，复制排版不需要）");
+    const meta = this.effectiveMeta(file);
+    if (meta.title.length > 64) issues.push(`标题 ${meta.title.length} 字，超过 64 字会被截断`);
+    if (meta.digest.length > 120) issues.push(`摘要 ${meta.digest.length} 字，超过 120 字会被截断`);
+    if (!this.resolveCover(file, result.images).source) issues.push("没有封面：点上方稿件资料选择，或在正文放一张图");
+    return issues;
+  }
+
   async openMetaEditor(file: TFile) {
     const { result } = await this.renderFile(file, "preview");
     const meta = this.readMeta(file);
@@ -291,15 +325,15 @@ export default class WechatPublisherPlugin extends Plugin {
       return url;
     };
     const s = this.settings;
+    // 与 Obsidian 的「严格换行」设置保持一致：默认单个换行就是换行
+    const strict = (this.app.vault as unknown as { getConfig?(k: string): unknown }).getConfig?.("strictLineBreaks") === true;
     const result = await renderForWechat(source, {
       themeId: s.themeId,
       themeColor: s.themeColor,
-      fontSize: s.fontSize,
       layout: s.layout,
-      codeTheme: s.codeTheme,
-      macCodeBlock: s.macCodeBlock,
+      tune: s.tune,
+      breaks: !strict,
       linkToFootnote: s.linkToFootnote,
-      imageCaption: s.imageCaption,
       resolveImage,
       rasterize: svgToPng,
       renderMermaid: renderMermaidSvg,
@@ -309,14 +343,20 @@ export default class WechatPublisherPlugin extends Plugin {
 
   // ------------------------------------------------------------ 动作
 
-  private async run(reporter: Reporter, fn: () => Promise<string>, onError?: (e: unknown) => boolean) {
+  private async run(
+    reporter: Reporter,
+    fn: () => Promise<string | { message: string; actions: ReporterAction[] }>,
+    onError?: (e: unknown) => boolean,
+  ) {
     if (this.busy) {
       new Notice("上一个任务还在进行中…");
       return;
     }
     this.busy = true;
     try {
-      reporter.finish(true, await fn());
+      const r = await fn();
+      if (typeof r === "string") reporter.finish(true, r);
+      else reporter.finish(true, r.message, r.actions);
     } catch (e) {
       console.error("[wechat-mp-publisher]", e);
       const handled = onError?.(e) ?? false;
@@ -396,7 +436,12 @@ export default class WechatPublisherPlugin extends Plugin {
         }
         reporter.update("draft", "done", updated ? "已更新原草稿" : "已新建草稿");
         if (this.settings.openBrowserAfterPublish) window.open(MP_HOME);
-        return `✅ 已${updated ? "更新" : "新建"}草稿「${article.title}」→ 公众号后台「内容与互动 → 草稿箱」`;
+        return {
+          message:
+            `✅ 「${article.title}」已${updated ? "更新到" : "放入"}草稿箱，图片和封面都已就绪。\n` +
+            `下一步：公众号后台 →「内容与互动 → 草稿箱」→ 找到这篇 →「发表」。`,
+          actions: [{ label: "去公众号发表", cta: true, onClick: () => window.open(MP_HOME) }],
+        };
       },
       (e) => {
         reporter.update(current, "error");
@@ -438,7 +483,10 @@ export default class WechatPublisherPlugin extends Plugin {
           mode === "inline" && result.images.length
             ? "（未配置账号：图片为内嵌方式，个别图片可能需要在编辑器里重新上传）"
             : "";
-        return `✅ 已复制，到公众号编辑器正文里粘贴即可${tip}`;
+        return {
+          message: `✅ 已复制，到公众号编辑器正文里粘贴即可${tip}`,
+          actions: [{ label: "打开公众号后台", onClick: () => window.open(MP_HOME) }],
+        };
       },
       (e) => {
         reporter.update("render", "error");

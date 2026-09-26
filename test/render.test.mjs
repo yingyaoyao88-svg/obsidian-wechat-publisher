@@ -5,8 +5,8 @@ import { renderForWechat } from "./.build/render.mjs";
 
 const md = readFileSync(new URL("./sample.md", import.meta.url), "utf8");
 const res = await renderForWechat(md, {
-  themeId: "default", themeColor: "#1e80ff", fontSize: 15, codeTheme: "one-dark",
-  macCodeBlock: true, linkToFootnote: true, imageCaption: true,
+  themeId: "classic", linkToFootnote: true,
+  tune: { codeTheme: "one-dark", figureCaptionMode: "alt-first" },
   resolveImage: async (src) => `https://mmbiz.qpic.cn/fake/${encodeURIComponent(src)}`,
   parseHTML: (h) => new JSDOM(h).window.document,
 });
@@ -25,7 +25,7 @@ assert.ok(h.includes("图注文字"), "图注");
 assert.ok(h.includes("[1] 外链: https://example.com"), "外链转脚注");
 assert.ok(/<br>/.test(h) && h.includes("<br>&nbsp;&nbsp;&nbsp;&nbsp;<span"), "代码空白处理");
 assert.ok(h.includes("color:#c678dd"), "代码高亮内联颜色");
-assert.ok(h.includes("💡 小提示"), "callout");
+assert.ok(h.includes(">小提示<") && !h.includes("[!tip]"), "callout（调色板主题：与引用同款、无图标）");
 assert.ok(!h.includes("[[不应处理]]"), "callout 内双链也会转文本");
 assert.ok(h.includes("☐") && h.includes("☑"), "任务列表");
 assert.ok(res.warnings.length === 0, res.warnings.join());
@@ -38,8 +38,7 @@ let gallery = "";
 for (const t of THEMES) {
   assert.match(t.defaultColor, /^#[0-9a-f]{6}$/i, `${t.id} 推荐色需为 6 位十六进制（样式里会拼接透明度）`);
   const r = await renderForWechat(md, {
-    themeId: t.id, themeColor: t.defaultColor, fontSize: 15, codeTheme: "one-dark",
-    macCodeBlock: true, linkToFootnote: true, imageCaption: true,
+    themeId: t.id, themeColor: t.defaultColor, linkToFootnote: true,
     resolveImage: async (src) => src,
     parseHTML: (h) => new JSDOM(h).window.document,
   });
@@ -52,8 +51,7 @@ for (const t of THEMES) {
 writeFileSync(new URL("./.build/gallery.html", import.meta.url), `<meta charset=utf-8><body style="display:flex;flex-wrap:wrap;gap:12px;width:1700px">${gallery}</body>`);
 // 结构装饰确实插入了
 const renderWith = (id) => renderForWechat(md, {
-  themeId: id, themeColor: THEMES.find((t) => t.id === id).defaultColor, fontSize: 15, codeTheme: "one-dark",
-  macCodeBlock: true, linkToFootnote: true, imageCaption: true, resolveImage: async (s) => s,
+  themeId: id, themeColor: THEMES.find((t) => t.id === id).defaultColor, linkToFootnote: true, resolveImage: async (s) => s,
   parseHTML: (h) => new JSDOM(h).window.document,
 });
 const xhs = (await renderWith("xhs")).html;
@@ -68,8 +66,7 @@ console.log(`themes ok: ${THEMES.length} 个主题`);
 
 // ---- 公式 / Mermaid / 排版模板 / 后台链接
 const base = {
-  themeId: "default", themeColor: "#1e80ff", fontSize: 15, codeTheme: "one-dark",
-  macCodeBlock: true, linkToFootnote: true, imageCaption: true,
+  themeId: "classic", linkToFootnote: true,
   resolveImage: async (s) => s, parseHTML: (h) => new JSDOM(h).window.document,
 };
 {
@@ -106,6 +103,35 @@ for (const layout of ["compact", "relaxed", "column"]) {
 }
 const col = (await renderForWechat(md, { ...base, layout: "column" })).html;
 assert.ok(col.includes("text-indent:2em"), "专栏版首行缩进");
+
+// ---- 调色板主题 × 排版模板 × 高级微调
+{
+  const r = (opts) => renderForWechat("## 标题\n\n> 引用\n\n正文第一行\n第二行", { ...base, ...opts }).then((x) => x.html);
+  const solid = await r({ themeId: "classic" });
+  assert.ok(/<h2 style="[^"]*display:table;[^"]*background:#0F4C81/.test(solid), "均衡版二级标题为主色色块");
+  const capsule = await r({ themeId: "classic", tune: { h2Style: "capsule" } });
+  assert.ok(/<h2 style="[^"]*border-radius:999px/.test(capsule), "高级微调可改标题款式");
+  const custom = await r({ themeId: "classic", themeColor: "#ff0000" });
+  assert.ok(custom.includes("background:#ff0000"), "自定义主题色覆盖调色板主色");
+  assert.ok(/正文第一行<span style="[^"]*display:block[^"]*">第二行<\/span>/.test(solid), "单个换行渲染为换行（与 Obsidian 默认一致），续行为块级以继承首行缩进");
+  assert.ok(!/<span style="[^"]*display:block[^"]*">第二行/.test(await r({ breaks: false })), "严格换行模式下不换行");
+  const callout = await renderForWechat("> [!tip] 提示\n> 内容", { ...base, themeId: "neon-terminal" });
+  assert.ok(/<blockquote style="[^"]*background:#1A293A/.test(callout.html), "调色板主题的 callout 就是引用块，吃到主题覆盖样式");
+  // minimal 主题的 !important 覆盖：竖线变细、去掉底色
+  const minimal = await r({ themeId: "minimal" });
+  const bq = minimal.match(/<blockquote style="([^"]*)"/)[1];
+  assert.ok(/border-left-width:2px/.test(bq) && /background:transparent/.test(bq), "cssOverrides 的 !important 生效：" + bq);
+  assert.ok(bq.indexOf("border-left-width:2px") > bq.indexOf("border-left:4px"), "!important 的展开属性排在简写之后");
+  // 旧主题 ID 自动映射
+  assert.equal(await r({ themeId: "default" }), solid, "旧 ID default → classic");
+  // 深色主题代码块配色来自调色板
+  const neon = await renderForWechat("```js\nlet a = 1\n```", { ...base, themeId: "neon-terminal" });
+  assert.ok(neon.html.includes("background:#0B111B"), "代码底色取主题 codeBackground");
+  // 浅色代码配色不再配深色底
+  const light = await renderForWechat("```js\nlet a = 1\n```", { ...base, tune: { codeTheme: "github" } });
+  assert.ok(light.html.includes("background:#f6f8fa"), "GitHub 浅色代码配浅底");
+}
+console.log("palette themes ok");
 console.log("math/mermaid/layout ok");
 
 // ---- 账号粘贴识别 / 40164 IP 解析

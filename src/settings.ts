@@ -1,7 +1,7 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type WechatPublisherPlugin from "./main";
-import { LAYOUTS, THEMES } from "./render";
-import type { CodeThemeId, LayoutId } from "./render/theme";
+import { normalizeThemeId, PROFILES, THEMES, themeDefaultColor } from "./render";
+import type { LayoutId, Tune } from "./render";
 
 export interface WechatAccount {
   id: string;
@@ -15,17 +15,27 @@ export interface WechatAccount {
   defaultCover: string;
 }
 
+/** 「我的方案」：保存下来的 主题 + 主题色 + 排版模板 + 高级微调 */
+export interface StylePreset {
+  id: string;
+  name: string;
+  themeId: string;
+  themeColor: string;
+  layout: LayoutId;
+  tune: Tune;
+}
+
 export interface WechatSettings {
   accounts: WechatAccount[];
   activeAccountId: string;
   themeId: string;
   themeColor: string;
-  fontSize: number;
+  /** 排版模板（均衡 / 紧凑 / 舒展 / 专栏） */
   layout: LayoutId;
-  codeTheme: CodeThemeId;
-  macCodeBlock: boolean;
+  /** 高级微调：覆盖排版模板里的字段 */
+  tune: Tune;
+  presets: StylePreset[];
   linkToFootnote: boolean;
-  imageCaption: boolean;
   openComment: boolean;
   updateExistingDraft: boolean;
   openBrowserAfterPublish: boolean;
@@ -38,14 +48,12 @@ export interface WechatSettings {
 export const DEFAULT_SETTINGS: WechatSettings = {
   accounts: [],
   activeAccountId: "",
-  themeId: "default",
-  themeColor: "#1e80ff",
-  fontSize: 15,
+  themeId: "classic",
+  themeColor: "#0F4C81",
   layout: "balanced",
-  codeTheme: "one-dark",
-  macCodeBlock: true,
+  tune: {},
+  presets: [],
   linkToFootnote: true,
-  imageCaption: true,
   openComment: true,
   updateExistingDraft: true,
   openBrowserAfterPublish: true,
@@ -81,6 +89,18 @@ export function migrateSettings(raw: Record<string, unknown> | undefined): Wecha
     );
   }
   for (const k of ["appId", "appSecret", "defaultAuthor", "defaultCover"]) delete s[k];
+
+  // 0.2.x → 0.3：旧“经典”主题换成调色板主题；字号/代码配色/圆点/图注并入高级微调（只保留改过默认值的）
+  const oldId = s.themeId;
+  s.themeId = normalizeThemeId(s.themeId);
+  if (oldId !== s.themeId) s.themeColor = themeDefaultColor(s.themeId);
+  if (!s.tune || typeof s.tune !== "object") s.tune = {};
+  if (!Array.isArray(s.presets)) s.presets = [];
+  if (typeof s.fontSize === "number" && s.fontSize !== 15 && s.tune.fontSize === undefined) s.tune.fontSize = s.fontSize;
+  if (s.codeTheme === "github" && s.tune.codeTheme === undefined) s.tune.codeTheme = "github";
+  if (s.macCodeBlock === false && s.tune.showMacCodeHeader === undefined) s.tune.showMacCodeHeader = false;
+  if (s.imageCaption === false && s.tune.figureCaptionMode === undefined) s.tune.figureCaptionMode = "none";
+  for (const k of ["fontSize", "codeTheme", "macCodeBlock", "imageCaption"]) delete s[k];
   if (!s.accounts.some((a) => a.id === s.activeAccountId)) s.activeAccountId = s.accounts[0]?.id ?? "";
   return s;
 }
@@ -139,13 +159,13 @@ export class WechatSettingTab extends PluginSettingTab {
     containerEl.createEl("h3", { text: "排版" });
     containerEl.createEl("p", {
       cls: "setting-item-description",
-      text: "主题、主题色、排版模板和字号也可以在预览面板的「格式」里一键切换。",
+      text: "主题、排版模板、主题色、字号也可以在预览面板的「格式」里一键切换，效果实时可见。",
     });
     new Setting(containerEl).setName("主题").addDropdown((d) => {
       THEMES.forEach((t) => d.addOption(t.id, `${t.group} · ${t.name}`));
       d.setValue(s.themeId).onChange(async (v) => {
         s.themeId = v;
-        s.themeColor = THEMES.find((t) => t.id === v)?.defaultColor ?? s.themeColor;
+        s.themeColor = themeDefaultColor(v);
         await save();
         this.display(); // 刷新主题色选择器
       });
@@ -160,38 +180,16 @@ export class WechatSettingTab extends PluginSettingTab {
         }),
       );
     new Setting(containerEl).setName("排版模板").addDropdown((d) => {
-      LAYOUTS.forEach((l) => d.addOption(l.id, `${l.name} — ${l.desc}`));
+      PROFILES.forEach((l) => d.addOption(l.id, `${l.name} — ${l.desc}`));
       d.setValue(s.layout).onChange(async (v) => {
         s.layout = v as LayoutId;
         await save();
       });
     });
-    new Setting(containerEl).setName("正文字号").addSlider((sl) =>
-      sl
-        .setLimits(13, 18, 1)
-        .setValue(s.fontSize)
-        .setDynamicTooltip()
-        .onChange(async (v) => {
-          s.fontSize = v;
-          await save();
-        }),
-    );
-    new Setting(containerEl).setName("代码主题").addDropdown((d) =>
-      d
-        .addOption("one-dark", "One Dark（深色）")
-        .addOption("github", "GitHub（浅色）")
-        .setValue(s.codeTheme)
-        .onChange(async (v) => {
-          s.codeTheme = v as CodeThemeId;
-          await save();
-        }),
-    );
-    new Setting(containerEl).setName("代码块 Mac 风格圆点").addToggle((t) =>
-      t.setValue(s.macCodeBlock).onChange(async (v) => {
-        s.macCodeBlock = v;
-        await save();
-      }),
-    );
+    new Setting(containerEl)
+      .setName("高级微调 / 我的方案")
+      .setDesc("字号、行距、对齐、缩进、各级标题款式、引用块、代码配色、图注……在模板基础上逐项调整，并可保存为方案。")
+      .addButton((b) => b.setButtonText("打开").onClick(() => this.plugin.openTuneModal()));
     new Setting(containerEl)
       .setName("外链转为文末脚注")
       .setDesc("非认证公众号正文不能放外部链接，开启后链接会变成「文字[1]」并在文末列出网址。")
@@ -201,11 +199,5 @@ export class WechatSettingTab extends PluginSettingTab {
           await save();
         }),
       );
-    new Setting(containerEl).setName("显示图注（图片 alt 文字）").addToggle((t) =>
-      t.setValue(s.imageCaption).onChange(async (v) => {
-        s.imageCaption = v;
-        await save();
-      }),
-    );
   }
 }

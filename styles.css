@@ -207,10 +207,33 @@
   box-shadow: 0 0 0 2px var(--interactive-accent);
 }
 .wxp-swatch {
-  height: 22px;
+  height: 24px;
   border-radius: 4px;
-  background: linear-gradient(90deg, var(--wxp-swatch) 0 38%, color-mix(in srgb, var(--wxp-swatch) 18%, #fff) 38% 100%);
+  border: 1px solid var(--background-modifier-border);
+  background: linear-gradient(90deg, var(--wxp-swatch) 0 34%, var(--wxp-swatch-soft) 34% 67%, var(--wxp-swatch-bg) 67% 100%);
   margin-bottom: 4px;
+}
+.wxp-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.wxp-chips button {
+  border-radius: 999px;
+  font-size: var(--font-ui-small);
+}
+.wxp-chips button.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+.wxp-tune-open {
+  margin-left: auto;
+}
+.wxp-tune-modal {
+  width: min(620px, 92vw);
+}
+.wxp-tune-modal h4 {
+  margin: 18px 0 4px;
 }
 .wxp-theme-name {
   font-size: var(--font-ui-smaller);
@@ -454,4 +477,16 @@
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 8px;
+}
+
+.wxp-progress-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+.wxp-preflight {
+  margin-top: 4px;
+  color: var(--text-warning);
+  line-height: 1.6;
 }
