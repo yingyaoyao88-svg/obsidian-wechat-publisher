@@ -149,6 +149,17 @@ npm run build        # 编译生成 main.js
 
 ---
 
+## 💬 交流与反馈
+
+欢迎扫码添加作者微信（微信号：`15038098595`，添加请备注 GitHub 项目名），交流 Obsidian 插件开发、公众号排版自动化与独立产品经验：
+
+<div align="center">
+  <img src="https://imaomyying.com/wechat-qrcode.jpg" width="220" alt="小A 微信二维码" />
+  <p><b>扫码添加作者微信好友（微信号：15038098595）</b></p>
+</div>
+
+---
+
 ## 📄 开源协议
 
 本项目基于 [MIT License](LICENSE) 协议开源。
